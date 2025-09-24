@@ -1,8 +1,10 @@
 ---
 title: "Hands-on Exercise 01a: Geospatial Data Wrangling"
-author: "Your Name"
-date: today
 format: html
+execute:
+  freeze: true      
+  warning: false
+  message: true
 ---
 
 ## Overview
@@ -13,12 +15,14 @@ This exercise focuses on importing, cleaning, and standardizing geospatial data 
 
 ```{r setup, message=FALSE, warning=FALSE}
 # Load required packages (including lwgeom for geometry validation)
+if (!requireNamespace("pacman", quietly = TRUE)) install.packages("pacman")
+
 pacman::p_load(sf, lwgeom, dplyr, readr, janitor, stringr, here)
 
 # Print session information for reproducibility
 cat("R version:", R.version.string, "\n")
-cat("sf version:", packageVersion("sf"), "\n")
-cat("Date:", Sys.Date(), "\n\n")
+cat("sf version:", as.character(packageVersion("sf")), "\n")
+message("Date: ", as.character(Sys.Date()))
 
 # Define path variables using here::here()
 path_root <- here::here()
@@ -43,17 +47,31 @@ message("\n=== Importing Subzone Data ===")
 
 subzone_file <- file.path(path_geo, "MP14_SUBZONE_WEB_PL.shp")
 if (!file.exists(subzone_file)) {
-  stop("MP14_SUBZONE_WEB_PL.shp not found at: ", subzone_file, 
+  stop("MP14_SUBZONE_WEB_PL.shp not found at: ", subzone_file,
        "\nPlease ensure the file is placed in: ", path_geo)
 }
 
-mpsz <- st_read(dsn = path_geo, layer = "MP14_SUBZONE_WEB_PL", quiet = FALSE)
+mpsz <- sf::st_read(dsn = path_geo, layer = "MP14_SUBZONE_WEB_PL", quiet = FALSE)
+
+sub_crs <- sf::st_crs(mpsz)
+if (is.na(sub_crs$epsg)) {
+  hint <- paste(sub_crs$input, sub_crs$wkt)
+  if (grepl("SVY21|Singapore TM|3414", hint, ignore.case = TRUE)) {
+    message("Subzone CRS shows 'SVY21' but EPSG is missing — setting EPSG:3414 explicitly.")
+    mpsz <- sf::st_set_crs(mpsz, 3414)
+  } else {
+    stop("Subzone CRS has no EPSG and doesn't look like SVY21. Check the .prj file.")
+  }
+}
 
 # Display basic information
 message("Subzone data imported successfully")
 message("- Records: ", nrow(mpsz))
-message("- CRS EPSG: ", st_crs(mpsz)$epsg)
-message("- Geometry type: ", unique(st_geometry_type(mpsz)))
+message("- CRS: ", sf::st_crs(mpsz)$input, " | EPSG: ", sf::st_crs(mpsz)$epsg)
+message("- Geometry type: ", paste(unique(sf::st_geometry_type(mpsz)), collapse = ", "))
+
+
+
 ```
 
 ```{r import-cycling, message=TRUE}
@@ -63,17 +81,29 @@ message("\n=== Importing Cycling Path Data ===")
 cycling_file <- file.path(path_geo, "CyclingPath_Aug2025", "CyclingPathGazette.shp")
 if (!file.exists(cycling_file)) {
   stop("CyclingPathGazette.shp not found at: ", cycling_file,
-       "\nPlease ensure the file is placed in: ", 
-       file.path(path_geo, "CyclingPath_Aug2025"))
+       "\nPlease ensure the file is placed in: ", file.path(path_geo, "CyclingPath_Aug2025"))
 }
 
-cycling_path <- st_read(cycling_file, quiet = FALSE)
+cycling_path <- sf::st_read(cycling_file, quiet = FALSE)
+
+
+cy_crs <- sf::st_crs(cycling_path)
+if (is.na(cy_crs$epsg)) {
+  hint <- paste(cy_crs$input, cy_crs$wkt)
+  if (grepl("SVY21|Singapore TM|3414", hint, ignore.case = TRUE)) {
+    message("Cycling Path CRS shows 'SVY21' but EPSG is missing — setting EPSG:3414 explicitly.")
+    cycling_path <- sf::st_set_crs(cycling_path, 3414)
+  } else {
+    stop("Cycling Path CRS has no EPSG and doesn't look like SVY21. Check the .prj file.")
+  }
+}
 
 # Display basic information
 message("Cycling path data imported successfully")
 message("- Records: ", nrow(cycling_path))
-message("- CRS EPSG: ", st_crs(cycling_path)$epsg)
-message("- Geometry type: ", unique(st_geometry_type(cycling_path)))
+message("- CRS: ", sf::st_crs(cycling_path)$input, " | EPSG: ", sf::st_crs(cycling_path)$epsg)
+message("- Geometry type: ", paste(unique(sf::st_geometry_type(cycling_path)), collapse = ", "))
+
 ```
 
 ```{r import-preschools, message=TRUE}
