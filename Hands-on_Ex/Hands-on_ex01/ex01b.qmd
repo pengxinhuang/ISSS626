@@ -1,0 +1,391 @@
+---
+title: "Hands-on Exercise 01b: Choropleth Mapping (Population 2024)"
+format: html
+execute:
+  freeze: true
+  warning: false
+  message: false
+---
+
+## Overview
+
+This exercise demonstrates choropleth mapping techniques using Singapore's 2024 population data. We'll create two thematic maps:
+
+1. **Aged population share (65+)** by Planning Area using quantile classification
+2. **Dependency ratio** by Planning Area using Jenks natural breaks classification
+
+## Setup and Environment
+
+```{r setup}
+# 兜底：没装 pacman 就装
+if (!requireNamespace("pacman", quietly = TRUE)) install.packages("pacman")
+if (!requireNamespace("pacman", quietly = TRUE)) install.packages("pacman")
+pacman::p_load(sf, dplyr, tidyr, readr, janitor, stringr, xml2, rvest,
+               tmap, here, units, purrr)
+
+# 需要 purrr，因为后面用到 map_chr / keep
+pacman::p_load(sf, dplyr, tidyr, readr, janitor, stringr, xml2, rvest,
+               tmap, here, units, purrr)
+tmap_mode("plot")
+
+path_ex01 <- here::here("Hands-on_Ex", "Hands-on_ex01")
+path_geo  <- file.path(path_ex01, "data", "geospatial")
+path_asp  <- file.path(path_ex01, "data", "aspatial")
+path_fig  <- file.path(path_ex01, "figures")
+if (!dir.exists(path_fig)) dir.create(path_fig, recursive = TRUE)
+
+message("Working directory: ", getwd())
+message("tmap version: ", as.character(packageVersion("tmap")))
+message("Date: ", as.character(Sys.Date()))
+tmap_options(show.messages = FALSE)  # 关闭“组件被缩放”等提示
+
+
+```
+
+## Data Import
+
+### Import Geospatial Data (KML)
+
+```{r import-boundary}
+# Import Master Plan 2019 Subzone Boundary (No Sea) from KML
+kml_file <- file.path(path_geo, "MasterPlan2019SubzoneBoundaryNoSeaKML.kml")
+
+if (!file.exists(kml_file)) {
+  stop("KML file not found at: ", kml_file)
+}
+
+# Read KML file
+subzone <- st_read(kml_file, quiet = FALSE)
+
+# Check if GEOMETRYCOLLECTION and extract polygons if needed
+if (any(st_geometry_type(subzone) == "GEOMETRYCOLLECTION")) {
+  message("Extracting POLYGON from GEOMETRYCOLLECTION...")
+  subzone <- st_collection_extract(subzone, "POLYGON")
+}
+
+# Transform to SVY21 (EPSG:3414)
+subzone <- st_transform(subzone, crs = 3414)
+
+message("CRS after transformation: EPSG:", st_crs(subzone)$epsg)
+```
+
+### Parse KML Attributes
+
+```{r parse-kml-attributes}
+# Function to extract field from HTML description
+extract_kml_field <- function(html_text, field_name) {
+  if (is.na(html_text) || html_text == "") return(NA_character_)
+  
+  page <- read_html(html_text)
+  rows <- page %>% html_elements("tr")
+  
+  # Find the row with matching field name
+  value <- rows %>%
+    keep(~ html_text2(html_element(.x, "th")) == field_name) %>%
+    html_element("td") %>%
+    html_text2()
+  
+  if (length(value) == 0) NA_character_ else value
+}
+
+# Check if PLN_AREA_N and SUBZONE_N exist
+if (!all(c("PLN_AREA_N", "SUBZONE_N") %in% names(subzone))) {
+  message("Extracting planning area and subzone names from Description field...")
+  
+  # Extract fields from HTML description
+  subzone <- subzone %>%
+    mutate(
+      pln_area_n = map_chr(Description, extract_kml_field, "PLN_AREA_N"),
+      subzone_n = map_chr(Description, extract_kml_field, "SUBZONE_N")
+    ) %>%
+    select(-Name, -Description)
+} else {
+  # If fields exist, just rename to snake_case
+  subzone <- subzone %>%
+    clean_names()
+}
+
+# Display sample data
+message("Subzone data structure:")
+message("- Records: ", nrow(subzone))
+message("- Planning areas: ", n_distinct(subzone$pln_area_n))
+```
+
+### Aggregate to Planning Area Level
+
+```{r aggregate-planning-area}
+# Aggregate subzones to planning area level
+planning <- subzone %>%
+  group_by(pln_area_n) %>%
+  summarise(
+    do_union = TRUE,
+    .groups = 'drop'
+  )
+
+message("Planning areas created: ", nrow(planning))
+
+# Verify CRS
+stopifnot(st_crs(planning) == st_crs(3414))
+```
+
+### Import Population Data
+
+```{r import-population}
+# --- Import population CSV (robust rename) ---
+pop_file <- file.path(path_asp, "respopagesextod2024.csv")
+if (!file.exists(pop_file)) stop("Population CSV file not found at: ", pop_file)
+
+pop_raw <- read_csv(pop_file, show_col_types = FALSE)
+message("Raw columns: ", paste(names(pop_raw), collapse = ", "))
+
+# 标准化列名为小写下划线
+popdata <- pop_raw %>% janitor::clean_names()
+
+nm <- names(popdata)
+if ("planning_area"     %in% nm) popdata <- dplyr::rename(popdata, pa  = planning_area)
+if ("planning_area_name"%in% nm) popdata <- dplyr::rename(popdata, pa  = planning_area_name)
+if ("age_group"         %in% nm) popdata <- dplyr::rename(popdata, ag  = age_group)
+if ("type_of_dwelling"  %in% nm) popdata <- dplyr::rename(popdata, tod = type_of_dwelling)
+if ("value"             %in% nm) popdata <- dplyr::rename(popdata, pop = value)
+
+popdata <- popdata %>%
+  mutate(
+    pa  = str_squish(pa),
+    ag  = str_replace_all(str_to_lower(ag), "\\s+", "_"),
+    tod = str_squish(tod),
+    sex = str_squish(sex)
+  )
+
+
+# 映射不同写法 -> 统一到 pa / ag / sex / tod / pop
+# （左边=原始列名，右边=统一后的列名）
+alias_map <- c(
+  "planning_area"    = "pa",
+  "planning_area_name" = "pa",
+  "pa"               = "pa",
+  "age_group"        = "ag",
+  "ag"               = "ag",
+  "sex"              = "sex",
+  "type_of_dwelling" = "tod",
+  "tod"              = "tod",
+  "value"            = "pop",
+  "population"       = "pop"
+)
+
+# 只对存在的列做重命名：rename(new = old)
+map <- alias_map[names(alias_map) %in% names(popdata)]
+popdata <- dplyr::rename(popdata, !!!setNames(names(map), map))
+
+# 现在这5列应该都在：pa / ag / sex / tod / pop
+need <- c("pa", "ag", "sex", "tod", "pop")
+miss <- setdiff(need, names(popdata))
+if (length(miss)) stop("These required columns are missing after rename: ", paste(miss, collapse = ", "))
+
+# 文本清洗：去多余空格，小写化 age_group 并把空格变下划线
+popdata <- popdata %>%
+  dplyr::mutate(
+    pa = stringr::str_squish(pa),
+    ag = stringr::str_replace_all(stringr::str_to_lower(ag), "\\s+", "_"),
+    tod = stringr::str_squish(tod),
+    sex = stringr::str_squish(sex)
+  )
+
+message("Normalized columns: ", paste(names(popdata), collapse = ", "))
+
+```
+
+## Data Wrangling
+
+### Process Population Data
+
+```{r process-population}
+# --- Process population BY SUBZONE (sum across Sex and TOD) ---
+
+# 前提：import-population 已 clean_names()，并把列名统一成 pa/sz/ag/sex/tod/pop/time
+# 如果你还没统一列名，请在 import-population 那块 clean_names() 后加：
+# nm <- names(popdata)
+# if ("planning_area" %in% nm) popdata <- dplyr::rename(popdata, pa = planning_area)
+# if ("subzone"       %in% nm) popdata <- dplyr::rename(popdata, sz = subzone)
+# if ("age_group"     %in% nm) popdata <- dplyr::rename(popdata, ag = age_group)
+# if ("type_of_dwelling" %in% nm) popdata <- dplyr::rename(popdata, tod = type_of_dwelling)
+# if ("value"         %in% nm) popdata <- dplyr::rename(popdata, pop = value)
+
+# 0) 只取 2024（如果有 time 列）
+pop_w <- popdata
+if ("time" %in% names(pop_w)) {
+  pop_w <- pop_w %>% dplyr::filter(time == max(time, na.rm = TRUE))
+}
+
+# 1) 不再按 Sex/TOD 过滤，直接“对子区+年龄段”把人头加总（= Total）
+pop_sz <- pop_w %>%
+  dplyr::group_by(sz, ag) %>%
+  dplyr::summarise(pop = sum(pop, na.rm = TRUE), .groups = "drop") %>%
+  # 标准化子区名，提取起始年龄
+  dplyr::mutate(
+    sz_clean  = stringr::str_squish(stringr::str_to_upper(sz)),
+    ag_start  = readr::parse_integer(stringr::str_extract(ag, "^[0-9]+")),
+    age_category = dplyr::case_when(
+      !is.na(ag_start) & ag_start <= 19 ~ "young",
+      !is.na(ag_start) & ag_start <= 64 ~ "econ",
+      TRUE                              ~ "aged"
+    )
+  ) %>%
+  dplyr::count(sz_clean, age_category, wt = pop, name = "population") %>%
+  tidyr::complete(sz_clean, age_category, fill = list(population = 0)) %>%
+  tidyr::pivot_wider(names_from = age_category, values_from = population, values_fill = 0)
+
+# 2) 指标（安全版）
+for (col in c("young","econ","aged")) if (!col %in% names(pop_sz)) pop_sz[[col]] <- 0
+pop_sz <- pop_sz %>%
+  dplyr::mutate(
+    total       = young + econ + aged,
+    aged_share  = dplyr::if_else(total > 0, 100 * aged / total, 0),
+    dependency  = dplyr::if_else(econ  > 0, 100 * (young + aged) / econ, NA_real_)
+  )
+
+message("Subzone-level population rows: ", nrow(pop_sz))
+
+
+```
+
+### Join Spatial and Population Data
+
+```{r join-data}
+# --- Build SZ -> PA bridge from KML, then aggregate to PA ---
+
+# 注意：你的子区几何对象在前文叫 subzone（若叫 mpsz，请把下行的 subzone 改成 mpsz）
+bridge <- subzone %>%
+  sf::st_drop_geometry() %>%
+  dplyr::transmute(
+    sz_clean       = stringr::str_squish(stringr::str_to_upper(subzone_n)),
+    pln_area_clean = stringr::str_squish(stringr::str_to_upper(pln_area_n))
+  ) %>%
+  dplyr::distinct()
+
+# 子区人口接上映射 → 聚合到规划区
+pop_pa <- pop_sz %>%
+  dplyr::left_join(bridge, by = "sz_clean") %>%
+  dplyr::filter(!is.na(pln_area_clean)) %>%
+  dplyr::group_by(pln_area_clean) %>%
+  dplyr::summarise(
+    young = sum(young, na.rm = TRUE),
+    econ  = sum(econ,  na.rm = TRUE),
+    aged  = sum(aged,  na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  dplyr::mutate(
+    total       = young + econ + aged,
+    aged_share  = dplyr::if_else(total > 0, 100 * aged / total, 0),
+    dependency  = dplyr::if_else(econ  > 0, 100 * (young + aged) / econ, NA_real_)
+  )
+
+message("Aggregated to planning areas: ", nrow(pop_pa), " (expected ≈55)")
+
+# 用 inner_join 接回规划区几何（保证有值的区才保留）
+planning <- planning %>% dplyr::mutate(
+  pln_area_clean = stringr::str_squish(stringr::str_to_upper(pln_area_n))
+)
+planning_pop <- planning %>%
+  dplyr::inner_join(pop_pa, by = "pln_area_clean")
+
+# 必须 >0（否则仍是 NA）
+stopifnot(sum(!is.na(planning_pop$aged_share)) > 0)
+stopifnot(sum(!is.na(planning_pop$dependency)) > 0)
+
+
+```
+
+## Create Choropleth Maps
+
+### Map A: Aged Population Share (65+)
+
+```{r map-aged-share}
+tmap_options(show.messages = FALSE)
+
+# Map A —— Aged 65+ share（过滤 NA，避免 Missing）
+planning_aged <- planning_pop[!is.na(planning_pop$aged_share) & !sf::st_is_empty(planning_pop), ]
+
+map_aged <- tm_shape(planning_aged) +
+  tm_polygons(col = "aged_share", style = "quantile", n = 5, palette = "Reds",
+              title = "Aged Share (%)") +
+  tm_layout(legend.outside = TRUE) +
+  tm_compass(type = "8star", size = 1.8, position = c("left","top")) +
+  tm_scale_bar(position = c("left","bottom")) +
+  tm_credits("Data: URA MP19 (No Sea), SingStat 2024\nCRS: SVY21 / EPSG:3414",
+             position = c("right","bottom"), size = 0.6)
+
+map_aged
+tmap_save(map_aged, file.path(path_fig, "ex01b_aged_share_quantile.png"),
+          width = 1600, height = 1200, dpi = 300, units = "px")
+
+
+```
+
+### Map B: Dependency Ratio
+
+```{r map-dependency}
+# Map B —— Dependency ratio（过滤 NA）
+planning_dep <- planning_pop[!is.na(planning_pop$dependency) & !sf::st_is_empty(planning_pop), ]
+
+map_dependency <- tm_shape(planning_dep) +
+  tm_polygons(col = "dependency", style = "jenks", n = 5, palette = "PuBuGn",
+              title = "Dependency Ratio (%)") +
+  tm_layout(legend.outside = TRUE) +
+  tm_compass(type = "8star", size = 1.8, position = c("left","top")) +
+  tm_scale_bar(position = c("left","bottom")) +
+  tm_credits("Data: URA MP19 (No Sea), SingStat 2024\nCRS: SVY21 / EPSG:3414",
+             position = c("right","bottom"), size = 0.6)
+
+map_dependency
+tmap_save(map_dependency, file.path(path_fig, "ex01b_dependency_jenks.png"),
+          width = 1600, height = 1200, dpi = 300, units = "px")
+
+
+```
+
+## Results
+
+The two choropleth maps have been successfully created and saved to the `figures` folder:
+
+### Map A: Share of Aged Population (65+)
+![Aged Population Share](figures/ex01b_aged_share_quantile.png)
+
+This map uses **quantile classification** with 5 classes to show the distribution of aged population (65 years and above) as a percentage of total population across Singapore's planning areas. The red color ramp helps identify areas with higher concentrations of elderly residents.
+
+### Map B: Dependency Ratio
+![Dependency Ratio](figures/ex01b_dependency_jenks.png)
+
+This map uses **Jenks natural breaks classification** with 5 classes to visualize the dependency ratio across planning areas. The dependency ratio represents the proportion of economically dependent population (young and aged) to the economically active population. The PuBuGn color scheme provides clear visual distinction between areas with different dependency levels.
+
+## Summary Statistics
+
+```{r summary-stats}
+# Display summary statistics
+cat("\n=== Summary Statistics ===\n")
+cat("\nAged Population Share (%):\n")
+summary(planning_pop$aged_share)
+
+cat("\nDependency Ratio (%):\n")
+summary(planning_pop$dependency)
+
+# Top 5 areas with highest aged share
+cat("\nTop 5 Planning Areas - Highest Aged Share:\n")
+planning_pop %>%
+  st_drop_geometry() %>%
+  select(pln_area_n, aged_share) %>%
+  arrange(desc(aged_share)) %>%
+  head(5) %>%
+  print()
+
+# Top 5 areas with highest dependency ratio
+cat("\nTop 5 Planning Areas - Highest Dependency Ratio:\n")
+planning_pop %>%
+  st_drop_geometry() %>%
+  select(pln_area_n, dependency) %>%
+  arrange(desc(dependency)) %>%
+  head(5) %>%
+  print()
+```
+
+---
+*End of Hands-on Exercise 01b*

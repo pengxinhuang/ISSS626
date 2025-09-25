@@ -1,0 +1,12 @@
+# netlify.toml  —— 告诉 Netlify 如何构建 Quarto 站点
+[build]
+command = "quarto render"
+publish = "_site"
+
+[build.environment]
+# 指定要安装的 Quarto 版本（和你本地一致即可）
+QUARTO_VERSION = "1.5.56"
+
+# 安装并使用 Quarto 插件（会在构建时自动下载 Quarto CLI）
+[[plugins]]
+package = "@quarto/netlify-plugin-quarto"
