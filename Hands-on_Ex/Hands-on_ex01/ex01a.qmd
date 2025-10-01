@@ -17,7 +17,7 @@ This exercise focuses on importing, cleaning, and standardizing geospatial data 
 # Load required packages (including lwgeom for geometry validation)
 if (!requireNamespace("pacman", quietly = TRUE)) install.packages("pacman")
 
-pacman::p_load(sf, lwgeom, dplyr, readr, janitor, stringr, here)
+pacman::p_load(sf, lwgeom, dplyr, readr, janitor, stringr, here, tmap, ggplot2, units)
 
 # Print session information for reproducibility
 cat("R version:", R.version.string, "\n")
@@ -148,7 +148,73 @@ message("- Columns: ", ncol(listings))
 message("- Latitude/Longitude columns: VERIFIED")
 ```
 
-### Step 2: Coordinate System Transformation and Validation
+### Step 2: Exploratory Data Inspection (Ch. 1.5–1.6)
+
+```{r inspect-subzone, message=TRUE}
+message("\n=== Inspecting Subzone Data Structure ===")
+
+# Geometry column summary and CRS bbox overview
+print(st_geometry(mpsz))
+print(st_bbox(mpsz))
+
+# Attribute glimpse and sample records
+glimpse(mpsz)
+print(head(mpsz, 3))
+```
+
+```{r inspect-cycling, message=TRUE}
+message("\n=== Inspecting Cycling Path Data Structure ===")
+
+print(st_geometry(cycling_path))
+print(st_bbox(cycling_path))
+
+glimpse(cycling_path)
+print(head(cycling_path, 3))
+```
+
+```{r inspect-preschools, message=TRUE}
+message("\n=== Inspecting Pre-School Data Structure ===")
+
+print(st_geometry(preschools))
+print(st_bbox(preschools))
+
+glimpse(preschools)
+print(head(preschools, 3))
+```
+
+```{r exploratory-plots, message=TRUE}
+message("\n=== Quick Look Plots (Chapter 1.6) ===")
+
+op <- par(mfrow = c(2, 2))
+plot(mpsz, main = "MPSZ Subzones")
+plot(st_geometry(mpsz), main = "Subzone Geometry Only")
+if ("PLN_AREA_N" %in% names(mpsz)) {
+  plot(mpsz["PLN_AREA_N"], main = "Planning Area Names")
+} else if ("pln_area_n" %in% names(mpsz)) {
+  plot(mpsz["pln_area_n"], main = "Planning Area Names")
+} else {
+  plot(st_geometry(mpsz), main = "Planning Area Names")
+}
+plot(st_geometry(mpsz), main = "Subzones with Pre-Schools")
+plot(st_geometry(preschools), add = TRUE, col = "red", pch = 20)
+par(op)
+```
+
+### Step 3: Converting Aspatial Data to sf (Ch. 1.8.2)
+
+```{r listings-to-sf, message=TRUE}
+message("\n=== Converting Airbnb Listings to sf ===")
+
+listings_sf <- listings %>%
+  st_as_sf(coords = c("longitude", "latitude"), crs = 4326, remove = FALSE) %>%
+  st_transform(3414)
+
+message("Listings converted to sf with CRS EPSG:", st_crs(listings_sf)$epsg)
+glimpse(listings_sf)
+print(head(listings_sf, 3))
+```
+
+### Step 4: Coordinate System Transformation and Validation
 
 ```{r crs-transform, message=TRUE}
 message("\n=== CRS Transformation and Validation ===")
@@ -214,7 +280,7 @@ if (!all(preschool_geom %in% c("POINT"))) {
 message("✓ All geometry types verified")
 ```
 
-### Step 3: Data Cleaning and Standardization
+### Step 5: Data Cleaning and Standardization
 
 ```{r data-cleaning, message=TRUE}
 message("\n=== Data Cleaning and Standardization ===")
@@ -298,7 +364,7 @@ if (any(!st_is_valid(preschools_clean))) {
 message("✓ All geometries are valid")
 ```
 
-### Step 4: Export Clean Data
+### Step 6: Export Clean Data
 
 ```{r export-data, message=TRUE}
 message("\n=== Exporting Clean Data ===")
@@ -338,6 +404,68 @@ message("- ", cycling_out)
 message("- ", preschools_out)
 ```
 
+### Step 7: Geospatial Processing Examples (Ch. 1.9)
+
+```{r geoprocessing, message=TRUE}
+message("\n=== Cycling Path Buffer and Area Calculations ===")
+
+# Create 5 metre buffer around cleaned cycling paths
+cycling_buffer <- st_buffer(cycling_clean, dist = 5)
+cycling_buffer_union <- st_union(cycling_buffer)
+
+buffer_area_sqm <- st_area(cycling_buffer_union)
+buffer_area_sqkm <- set_units(buffer_area_sqm, "km^2")
+
+message("Total buffered cycling corridor area: ", signif(as.numeric(buffer_area_sqkm), 4), " sq km")
+
+# Intersect buffer with a sample planning area (Bedok if present)
+target_planning <- if ("pln_area_n" %in% names(mpsz_clean)) {
+  mpsz_clean %>% filter(pln_area_n == "BEDOK")
+} else {
+  mpsz_clean[1, ]
+}
+
+buffer_in_planning <- st_intersection(st_make_valid(target_planning), cycling_buffer_union)
+
+if (nrow(buffer_in_planning) > 0) {
+  message("Buffered area within selected planning area: ",
+          signif(as.numeric(set_units(st_area(buffer_in_planning), "km^2")), 4), " sq km")
+} else {
+  message("No buffered cycling segments found within the selected planning area.")
+}
+
+# Count pre-schools per subzone
+message("\n=== Preschool Counts by Subzone ===")
+
+subzone_preschool <- mpsz_clean %>%
+  mutate(
+    subzone_area_sqkm = as.numeric(set_units(st_area(.), "km^2")),
+    preschool_count = lengths(st_intersects(., preschools_clean)),
+    preschool_density = preschool_count / subzone_area_sqkm
+  )
+
+subzone_summary <- subzone_preschool %>%
+  st_drop_geometry() %>%
+  transmute(
+    subzone_n,
+    planning_area = pln_area_n,
+    subzone_area_sqkm,
+    preschool_count,
+    preschool_density
+  )
+
+print(head(subzone_summary, 5))
+
+ggplot(subzone_preschool, aes(x = subzone_area_sqkm, y = preschool_density)) +
+  geom_point(alpha = 0.6, colour = "steelblue") +
+  labs(
+    x = "Subzone Area (sq km)",
+    y = "Preschool Density (count per sq km)",
+    title = "Preschool Density vs. Subzone Area"
+  ) +
+  theme_minimal()
+```
+
 ## Results
 
 ### Data Summary
@@ -371,10 +499,15 @@ message("   - Fields: ", paste(names(st_drop_geometry(preschools_clean)), collap
 # Listings Summary
 message("\n4. LISTINGS DATA (listings.csv - read only)")
 message("   - Records: ", nrow(listings))
-message("   - Latitude range: [", round(min(listings$latitude), 4), ", ", 
+message("   - Latitude range: [", round(min(listings$latitude), 4), ", ",
         round(max(listings$latitude), 4), "]")
-message("   - Longitude range: [", round(min(listings$longitude), 4), ", ", 
+message("   - Longitude range: [", round(min(listings$longitude), 4), ", ",
         round(max(listings$longitude), 4), "]")
+
+message("\n5. LISTINGS DATA (listings_sf - transformed)")
+message("   - Records: ", nrow(listings_sf))
+message("   - CRS: EPSG:", st_crs(listings_sf)$epsg)
+message("   - Geometry type: ", unique(st_geometry_type(listings_sf)))
 
 message("\n", strrep("=", 60))
 message("✓ All data processing completed successfully!")
