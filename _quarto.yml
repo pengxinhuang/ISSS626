@@ -1,0 +1,29 @@
+project:
+  type: website
+  output-dir: _site
+
+website:
+  title: "ISSS626 Portfolio — HUANG PENGXIN"
+  navbar:
+    left:
+      - text: Home
+        href: index.qmd
+      - text: Hands-on
+        menu:
+          - text: Ex01a · Geospatial Wrangling
+            href: Hands-on_Ex/Hands-on_ex01/ex01a.qmd
+          - text: Ex01b · Choropleth Mapping
+            href: Hands-on_Ex/Hands-on_ex01/ex01b.qmd          
+      - text: In-class
+        href: In-class_Ex/index.qmd
+      - text: Take-home
+        href: Take-home_Ex/index.qmd
+
+format:
+  html:
+    theme: cosmo
+    toc: true
+    code-fold: true
+execute:
+  freeze: auto
+editor: visual

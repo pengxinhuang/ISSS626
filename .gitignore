@@ -1,0 +1,11 @@
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+
+/.quarto/
+**/*.quarto_ipynb
+_site/
+Hands-on_Ex/**/data/**
+.DS_Store
+.Rproj.user/
