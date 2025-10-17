@@ -1,11 +1,25 @@
-.Rproj.user
+# RStudio session files
+.Rproj.user/
 .Rhistory
 .RData
 .Ruserdata
 
-/.quarto/
+# Quarto build/cache folders
+.quarto/
+_freeze/
 **/*.quarto_ipynb
-_site/
+
+# Ignore local data files (keep structure clean)
 Hands-on_Ex/**/data/**
+Take-home_Ex/**/data/**
+In-class_Ex/**/data/**
+
+# OS / system files
 .DS_Store
-.Rproj.user/
+Thumbs.db
+
+# Logs or temp files
+*.log
+
+# DO NOT ignore _site — needed for Netlify static hosting
+#!_site/
