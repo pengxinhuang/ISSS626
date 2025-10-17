@@ -17,7 +17,6 @@ This exercise focuses on importing, cleaning, and standardizing geospatial data 
 # Load required packages (including lwgeom for geometry validation)
 if (!requireNamespace("pacman", quietly = TRUE)) install.packages("pacman")
 
-pacman::p_load(sf, lwgeom, dplyr, readr, janitor, stringr, here)
 pacman::p_load(sf, lwgeom, dplyr, readr, janitor, stringr, here, tmap, ggplot2, units)
 
 # Print session information for reproducibility
@@ -44,7 +43,86 @@ message("Aspatial data path: ", path_asp)
 
 ```{r import-subzone, message=TRUE}
 # 1.1 Import MP14_SUBZONE_WEB_PL (Polygon)
-@@ -126,51 +126,117 @@ message("- Geometry type: ", unique(st_geometry_type(preschools)))
+message("\n=== Importing Subzone Data ===")
+
+subzone_file <- file.path(path_geo, "MP14_SUBZONE_WEB_PL.shp")
+if (!file.exists(subzone_file)) {
+  stop("MP14_SUBZONE_WEB_PL.shp not found at: ", subzone_file,
+       "\nPlease ensure the file is placed in: ", path_geo)
+}
+
+mpsz <- sf::st_read(dsn = path_geo, layer = "MP14_SUBZONE_WEB_PL", quiet = FALSE)
+
+sub_crs <- sf::st_crs(mpsz)
+if (is.na(sub_crs$epsg)) {
+  hint <- paste(sub_crs$input, sub_crs$wkt)
+  if (grepl("SVY21|Singapore TM|3414", hint, ignore.case = TRUE)) {
+    message("Subzone CRS shows 'SVY21' but EPSG is missing — setting EPSG:3414 explicitly.")
+    mpsz <- sf::st_set_crs(mpsz, 3414)
+  } else {
+    stop("Subzone CRS has no EPSG and doesn't look like SVY21. Check the .prj file.")
+  }
+}
+
+# Display basic information
+message("Subzone data imported successfully")
+message("- Records: ", nrow(mpsz))
+message("- CRS: ", sf::st_crs(mpsz)$input, " | EPSG: ", sf::st_crs(mpsz)$epsg)
+message("- Geometry type: ", paste(unique(sf::st_geometry_type(mpsz)), collapse = ", "))
+
+
+
+```
+
+```{r import-cycling, message=TRUE}
+# 1.2 Import CyclingPathGazette (Line)
+message("\n=== Importing Cycling Path Data ===")
+
+cycling_file <- file.path(path_geo, "CyclingPath_Aug2025", "CyclingPathGazette.shp")
+if (!file.exists(cycling_file)) {
+  stop("CyclingPathGazette.shp not found at: ", cycling_file,
+       "\nPlease ensure the file is placed in: ", file.path(path_geo, "CyclingPath_Aug2025"))
+}
+
+cycling_path <- sf::st_read(cycling_file, quiet = FALSE)
+
+
+cy_crs <- sf::st_crs(cycling_path)
+if (is.na(cy_crs$epsg)) {
+  hint <- paste(cy_crs$input, cy_crs$wkt)
+  if (grepl("SVY21|Singapore TM|3414", hint, ignore.case = TRUE)) {
+    message("Cycling Path CRS shows 'SVY21' but EPSG is missing — setting EPSG:3414 explicitly.")
+    cycling_path <- sf::st_set_crs(cycling_path, 3414)
+  } else {
+    stop("Cycling Path CRS has no EPSG and doesn't look like SVY21. Check the .prj file.")
+  }
+}
+
+# Display basic information
+message("Cycling path data imported successfully")
+message("- Records: ", nrow(cycling_path))
+message("- CRS: ", sf::st_crs(cycling_path)$input, " | EPSG: ", sf::st_crs(cycling_path)$epsg)
+message("- Geometry type: ", paste(unique(sf::st_geometry_type(cycling_path)), collapse = ", "))
+
+```
+
+```{r import-preschools, message=TRUE}
+# 1.3 Import PreSchoolsLocation (Point)
+message("\n=== Importing Pre-Schools Data ===")
+
+preschool_file <- file.path(path_geo, "PreSchoolsLocation.kml")
+if (!file.exists(preschool_file)) {
+  stop("PreSchoolsLocation.kml not found at: ", preschool_file,
+       "\nPlease ensure the file is placed in: ", path_geo)
+}
+
+preschools <- st_read(preschool_file, quiet = FALSE)
+
+# Display basic information before transformation
+message("Pre-schools data imported successfully")
+message("- Records: ", nrow(preschools))
+message("- Original CRS EPSG: ", st_crs(preschools)$epsg)
+message("- Geometry type: ", unique(st_geometry_type(preschools)))
 ```
 
 ```{r import-listings, message=TRUE}
@@ -70,7 +148,6 @@ message("- Columns: ", ncol(listings))
 message("- Latitude/Longitude columns: VERIFIED")
 ```
 
-### Step 2: Coordinate System Transformation and Validation
 ### Step 2: Exploratory Data Inspection (Ch. 1.5–1.6)
 
 ```{r inspect-subzone, message=TRUE}
@@ -137,6 +214,24 @@ glimpse(listings_sf)
 print(head(listings_sf, 3))
 ```
 
+```{r listings-map, message=FALSE}
+message("\n=== DIY Map: Airbnb Listings over Subzones ===")
+
+old_tmap_mode <- tmap_mode("plot")
+
+tmap::tm_shape(mpsz) +
+  tmap::tm_polygons(col = "grey90", border.col = "grey60") +
+  tmap::tm_shape(listings_sf) +
+  tmap::tm_symbols(col = "tomato", size = 0.03, alpha = 0.5) +
+  tmap::tm_layout(
+    title = "Airbnb Listings across Singapore Subzones",
+    legend.show = FALSE,
+    frame = FALSE
+  )
+
+tmap_mode(old_tmap_mode)
+```
+
 ### Step 4: Coordinate System Transformation and Validation
 
 ```{r crs-transform, message=TRUE}
@@ -163,7 +258,21 @@ if (any(st_geometry_type(preschools) == "GEOMETRYCOLLECTION")) {
 
 # Verify all spatial data is in EPSG:3414
 message("\nVerifying CRS consistency...")
-@@ -192,51 +258,51 @@ message("✓ All spatial datasets are in EPSG:3414 (SVY21)")
+
+# Assert CRS for all spatial datasets using object comparison
+if (st_crs(mpsz) != crs_target) {
+  stop("Subzone CRS is not EPSG:3414. Current CRS: ", st_crs(mpsz)$input)
+}
+
+if (st_crs(cycling_path) != crs_target) {
+  stop("Cycling Path CRS is not EPSG:3414. Current CRS: ", st_crs(cycling_path)$input)
+}
+
+if (st_crs(preschools) != crs_target) {
+  stop("Pre-Schools CRS is not EPSG:3414 after transform. Current CRS: ", st_crs(preschools)$input)
+}
+
+message("✓ All spatial datasets are in EPSG:3414 (SVY21)")
 
 # Verify geometry types
 message("\nVerifying geometry types...")
@@ -189,7 +298,6 @@ if (!all(preschool_geom %in% c("POINT"))) {
 message("✓ All geometry types verified")
 ```
 
-### Step 3: Data Cleaning and Standardization
 ### Step 5: Data Cleaning and Standardization
 
 ```{r data-cleaning, message=TRUE}
@@ -216,7 +324,39 @@ if (all(c("subzone_n", "pln_area_n") %in% names(mpsz))) {
 
 # For cycling path: retain basic identification fields
 cycling_clean <- cycling_path %>%
-@@ -276,127 +342,194 @@ if (n_empty_preschools > 0) {
+  select(any_of(c("objectid", "name", "type", "status")), geometry)
+
+# For preschools: retain name field
+if ("name" %in% names(preschools)) {
+  preschools_clean <- preschools %>%
+    select(name, geometry)
+} else {
+  message("Note: 'name' field not found in Pre-Schools. Retaining all fields.")
+  preschools_clean <- preschools
+}
+
+# 3.3 Remove empty geometries
+message("Checking for empty geometries...")
+
+# Check and remove empty geometries
+n_empty_mpsz <- sum(st_is_empty(mpsz_clean))
+n_empty_cycling <- sum(st_is_empty(cycling_clean))
+n_empty_preschools <- sum(st_is_empty(preschools_clean))
+
+if (n_empty_mpsz > 0) {
+  message("Removing ", n_empty_mpsz, " empty geometries from subzone data")
+  mpsz_clean <- mpsz_clean[!st_is_empty(mpsz_clean), ]
+}
+
+if (n_empty_cycling > 0) {
+  message("Removing ", n_empty_cycling, " empty geometries from cycling path data")
+  cycling_clean <- cycling_clean[!st_is_empty(cycling_clean), ]
+}
+
+if (n_empty_preschools > 0) {
+  message("Removing ", n_empty_preschools, " empty geometries from preschools data")
+  preschools_clean <- preschools_clean[!st_is_empty(preschools_clean), ]
+}
 
 message("✓ Data cleaning completed")
 
@@ -242,7 +382,6 @@ if (any(!st_is_valid(preschools_clean))) {
 message("✓ All geometries are valid")
 ```
 
-### Step 4: Export Clean Data
 ### Step 6: Export Clean Data
 
 ```{r export-data, message=TRUE}
@@ -288,46 +427,86 @@ message("- ", preschools_out)
 ```{r geoprocessing, message=TRUE}
 message("\n=== Cycling Path Buffer and Area Calculations ===")
 
-# Create 5 metre buffer around cleaned cycling paths
-cycling_buffer <- st_buffer(cycling_clean, dist = 5)
-cycling_buffer_union <- st_union(cycling_buffer)
+# Create 5 metre buffer around cleaned cycling paths (per feature)
+cycling_buffer <- cycling_clean %>%
+  st_buffer(dist = 5) %>%
+  mutate(
+    buffer_area_sqm = st_area(.),
+    buffer_area_sqkm = set_units(buffer_area_sqm, "km^2")
+  )
 
-buffer_area_sqm <- st_area(cycling_buffer_union)
-buffer_area_sqkm <- set_units(buffer_area_sqm, "km^2")
+total_buffer_area <- sum(cycling_buffer$buffer_area_sqkm)
+message(
+  "Total buffered cycling corridor area (5 m): ",
+  signif(as.numeric(total_buffer_area), 4),
+  " sq km"
+)
 
-message("Total buffered cycling corridor area: ", signif(as.numeric(buffer_area_sqkm), 4), " sq km")
+# Intersect buffer with Tampines West subzone (if available)
+tampines_west <- mpsz_clean %>%
+  filter(
+    toupper(pln_area_n) == "TAMPINES",
+    toupper(subzone_n) == "TAMPINES WEST"
+  )
 
-# Intersect buffer with a sample planning area (Bedok if present)
-target_planning <- if ("pln_area_n" %in% names(mpsz_clean)) {
-  mpsz_clean %>% filter(pln_area_n == "BEDOK")
-} else {
-  mpsz_clean[1, ]
+if (nrow(tampines_west) == 0) {
+  message("Tampines West subzone not found – selecting first available subzone instead.")
+  tampines_west <- mpsz_clean[1, ]
 }
 
-buffer_in_planning <- st_intersection(st_make_valid(target_planning), cycling_buffer_union)
+tampines_buffer <- st_intersection(st_make_valid(tampines_west), st_union(cycling_buffer))
 
-if (nrow(buffer_in_planning) > 0) {
-  message("Buffered area within selected planning area: ",
-          signif(as.numeric(set_units(st_area(buffer_in_planning), "km^2")), 4), " sq km")
+if (nrow(tampines_buffer) > 0) {
+  tampines_area <- set_units(st_area(tampines_buffer), "km^2")
+  message(
+    "Buffered cycling area within selected subzone: ",
+    signif(as.numeric(tampines_area), 4),
+    " sq km"
+  )
 } else {
-  message("No buffered cycling segments found within the selected planning area.")
+  message("No buffered cycling segments found within the selected subzone.")
 }
 
+```
+
+```{r tampines-buffer-map, message=FALSE}
+message("\n=== Visualising Cycling Buffer in Tampines West ===")
+
+old_tmap_mode <- tmap_mode("plot")
+
+if (nrow(tampines_buffer) > 0) {
+  tmap::tm_shape(tampines_west) +
+    tmap::tm_polygons(col = "#f0f4ff", border.col = "#26456e") +
+    tmap::tm_shape(tampines_buffer) +
+    tmap::tm_fill(col = "#ffb347", alpha = 0.6) +
+    tmap::tm_layout(
+      title = "5 m Cycling Corridor Buffer in Tampines West",
+      legend.show = FALSE,
+      frame = FALSE
+    )
+} else {
+  message("Skipping map because no buffered cycling segments were found in the selected subzone.")
+}
+
+tmap_mode(old_tmap_mode)
+```
+
+```{r preschool-summary, message=TRUE}
 # Count pre-schools per subzone
 message("\n=== Preschool Counts by Subzone ===")
 
 subzone_preschool <- mpsz_clean %>%
-  mutate(
-    subzone_area_sqkm = as.numeric(set_units(st_area(.), "km^2")),
-    preschool_count = lengths(st_intersects(., preschools_clean)),
+  dplyr::mutate(
+    subzone_area_sqkm = as.numeric(units::set_units(sf::st_area(.), "km^2")),
+    preschool_count   = lengths(sf::st_intersects(., preschools_clean)),
     preschool_density = preschool_count / subzone_area_sqkm
   )
 
 subzone_summary <- subzone_preschool %>%
-  st_drop_geometry() %>%
-  transmute(
+  sf::st_drop_geometry() %>%
+  dplyr::transmute(
     subzone_n,
-    planning_area = pln_area_n,
+    planning_area      = pln_area_n,
     subzone_area_sqkm,
     preschool_count,
     preschool_density
@@ -335,20 +514,44 @@ subzone_summary <- subzone_preschool %>%
 
 print(head(subzone_summary, 5))
 
-ggplot(subzone_preschool, aes(x = subzone_area_sqkm, y = preschool_density)) +
-  geom_point(alpha = 0.6, colour = "steelblue") +
+message("\nSummary of preschool density (counts per sq km):")
+print(summary(subzone_summary$preschool_density))
+
+top_subzone <- subzone_summary %>%
+  dplyr::arrange(dplyr::desc(preschool_count)) %>%
+  dplyr::slice_head(n = 1)
+
+message("\nSubzone with the highest preschool count:")
+print(top_subzone)
+```
+
+```{r preschool-hist, message=FALSE}
+p_hist <- ggplot(subzone_summary, aes(x = preschool_density)) +
+  geom_histogram(fill = "#74a9cf", colour = "white", bins = 20) +
   labs(
-    x = "Subzone Area (sq km)",
-    y = "Preschool Density (count per sq km)",
-    title = "Preschool Density vs. Subzone Area"
+    x = "Preschool Density (count per sq km)",
+    y = "Number of Subzones",
+    title = "Distribution of Preschool Density across Subzones"
   ) +
   theme_minimal()
+p_hist
+```
+
+```{r preschool-scatter, message=FALSE}
+p_scatter <- ggplot(subzone_summary, aes(x = preschool_count, y = preschool_density)) +
+  geom_point(alpha = 0.6, colour = "#2b8cbe") +
+  labs(
+    x = "Preschool Count",
+    y = "Preschool Density (count per sq km)",
+    title = "Preschool Density vs. Count"
+  ) +
+  theme_minimal()
+p_scatter
 ```
 
 ## Results
 
 ### Data Summary
-
 ```{r summary-output, message=TRUE}
 message("\n", strrep("=", 60), "\n")
 message("DATA PROCESSING SUMMARY")
@@ -357,38 +560,36 @@ message(strrep("=", 60), "\n")
 # Subzone Summary
 message("1. SUBZONE DATA (clean_subzone.gpkg)")
 message("   - Records: ", nrow(mpsz_clean))
-message("   - CRS: EPSG:", st_crs(mpsz_clean)$epsg, " (SVY21)")
-message("   - Geometry types: ", paste(unique(st_geometry_type(mpsz_clean)), collapse=", "))
-message("   - Fields: ", paste(names(st_drop_geometry(mpsz_clean)), collapse=", "))
+message("   - CRS: EPSG:", sf::st_crs(mpsz_clean)$epsg, " (SVY21)")
+message("   - Geometry types: ", paste(unique(sf::st_geometry_type(mpsz_clean)), collapse=", "))
+message("   - Fields: ", paste(names(sf::st_drop_geometry(mpsz_clean)), collapse=", "))
 
 # Cycling Path Summary
 message("\n2. CYCLING PATH DATA (clean_cycling_path.gpkg)")
 message("   - Records: ", nrow(cycling_clean))
-message("   - CRS: EPSG:", st_crs(cycling_clean)$epsg, " (SVY21)")
-message("   - Geometry types: ", paste(unique(st_geometry_type(cycling_clean)), collapse=", "))
-message("   - Fields: ", paste(names(st_drop_geometry(cycling_clean)), collapse=", "))
+message("   - CRS: EPSG:", sf::st_crs(cycling_clean)$epsg, " (SVY21)")
+message("   - Geometry types: ", paste(unique(sf::st_geometry_type(cycling_clean)), collapse=", "))
+message("   - Fields: ", paste(names(sf::st_drop_geometry(cycling_clean)), collapse=", "))
 
 # Pre-Schools Summary
 message("\n3. PRE-SCHOOLS DATA (clean_preschools_svy21.gpkg)")
 message("   - Records: ", nrow(preschools_clean))
-message("   - CRS: EPSG:", st_crs(preschools_clean)$epsg, " (SVY21)")
-message("   - Geometry types: ", paste(unique(st_geometry_type(preschools_clean)), collapse=", "))
-message("   - Fields: ", paste(names(st_drop_geometry(preschools_clean)), collapse=", "))
+message("   - CRS: EPSG:", sf::st_crs(preschools_clean)$epsg, " (SVY21)")
+message("   - Geometry types: ", paste(unique(sf::st_geometry_type(preschools_clean)), collapse=", "))
+message("   - Fields: ", paste(names(sf::st_drop_geometry(preschools_clean)), collapse=", "))
 
 # Listings Summary
 message("\n4. LISTINGS DATA (listings.csv - read only)")
 message("   - Records: ", nrow(listings))
-message("   - Latitude range: [", round(min(listings$latitude), 4), ", ", 
 message("   - Latitude range: [", round(min(listings$latitude), 4), ", ",
         round(max(listings$latitude), 4), "]")
-message("   - Longitude range: [", round(min(listings$longitude), 4), ", ", 
 message("   - Longitude range: [", round(min(listings$longitude), 4), ", ",
         round(max(listings$longitude), 4), "]")
 
 message("\n5. LISTINGS DATA (listings_sf - transformed)")
 message("   - Records: ", nrow(listings_sf))
-message("   - CRS: EPSG:", st_crs(listings_sf)$epsg)
-message("   - Geometry type: ", unique(st_geometry_type(listings_sf)))
+message("   - CRS: EPSG:", sf::st_crs(listings_sf)$epsg)
+message("   - Geometry type: ", unique(sf::st_geometry_type(listings_sf)))
 
 message("\n", strrep("=", 60))
 message("✓ All data processing completed successfully!")
@@ -396,21 +597,16 @@ message(strrep("=", 60))
 ```
 
 ### Sample Data Preview
-
 ```{r preview-data}
-# Preview first 5 records without geometry
+# Preview first 3 records without geometry
 message("\nSample records from cleaned datasets:")
 
 message("\nSubzone (first 3 records):")
-print(head(st_drop_geometry(mpsz_clean), 3))
+print(head(sf::st_drop_geometry(mpsz_clean), 3))
 
 message("\nCycling Path (first 3 records):")
-print(head(st_drop_geometry(cycling_clean), 3))
+print(head(sf::st_drop_geometry(cycling_clean), 3))
 
 message("\nPre-Schools (first 3 records):")
-print(head(st_drop_geometry(preschools_clean), 3))
+print(head(sf::st_drop_geometry(preschools_clean), 3))
 ```
-
-------------------------------------------------------------------------
-
-*End of Hands-on Exercise 01a*
