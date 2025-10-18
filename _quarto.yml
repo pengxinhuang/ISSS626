@@ -18,6 +18,8 @@ website:
             href: Hands-on_Ex/Hands-on_ex02/ex02a.qmd
           - text: Ex02b · Spatial Weights & Autocorrelation
             href: Hands-on_Ex/Hands-on_ex02/ex02b.qmd
+          - text: Ex03a · ST Point Patterns
+            href: Hands-on_Ex/Hands-on_ex03/ex03.qmd
       - text: In-class
         href: In-class_Ex/index.qmd
       - text: Take-home
