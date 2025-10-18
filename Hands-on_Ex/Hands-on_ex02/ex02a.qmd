@@ -1,0 +1,475 @@
+---
+title: "Hands-on Exercise 02a: Choropleth Mapping for Child Care Services"
+format: html
+execute:
+  freeze: true
+  warning: false
+  message: true
+---
+
+## Overview
+
+This exercise follows the Chapter 4 workflow from the course notes. We will:
+
+1. Import the 2019 Master Plan subzone polygons and the Early Childhood Development Agency (ECDA) child care point locations.
+2. Clean and standardize the data, ensuring all geometries use the SVY21 / EPSG:3414 projection.
+3. Compute analytical summaries, including the number of centres and (when available) registered capacity by subzone and planning area.
+4. Create exploratory maps (point overlay) and thematic choropleths that illustrate spatial patterns in the provision of child care services.
+
+The original data files should be placed at:
+
+* `Hands-on_Ex/Hands-on_ex02/data/MasterPlan2019SubzoneBoundaryNoSeaGEOJSON.geojson`
+* `Hands-on_Ex/Hands-on_ex02/data/ChildCareServices.geojson`
+
+## Setup and Environment
+
+```{r setup}
+if (!requireNamespace("pacman", quietly = TRUE)) install.packages("pacman")
+
+pacman::p_load(
+  sf, tidyverse, janitor, stringr, rvest,
+  here, tmap, units, readr, sessioninfo)
+
+tmap_mode("plot")
+
+root_dir <- here::here()
+exo_dir <- here::here("Hands-on_Ex", "Hands-on_ex02")
+exo_data <- here::here("Hands-on_Ex", "Hands-on_ex02", "data")
+exo_fig <- here::here("Hands-on_Ex", "Hands-on_ex02", "figures")
+
+if (!dir.exists(exo_fig)) dir.create(exo_fig, recursive = TRUE, showWarnings = FALSE)
+
+message("Project root: ", root_dir)
+message("Exercise directory: ", exo_dir)
+message("Data directory: ", exo_data)
+message("Figures directory: ", exo_fig)
+```
+
+## Import and Inspect Spatial Data
+
+### Master Plan Subzones (Polygon)
+
+```{r}
+message("\n=== Loading Master Plan 2019 subzones ===")
+subzone_path <- file.path(exo_data, "MasterPlan2019SubzoneBoundaryNoSeaGEOJSON.geojson")
+
+if (!file.exists(subzone_path)) {
+  stop("Subzone boundary GeoJSON not found at: ", subzone_path,
+       "\nDownload it from data.gov.sg and place it in the data directory before knitting.")
+}
+
+mpsz_2019 <- st_read(subzone_path, quiet = FALSE)
+
+if (is.na(st_crs(mpsz_2019))) {
+  stop("Master Plan subzones are missing CRS information. Please check the source file.")
+}
+
+if (st_crs(mpsz_2019)$epsg != 3414) {
+  message("Transforming subzones to EPSG:3414 (SVY21).")
+  mpsz_2019 <- st_transform(mpsz_2019, 3414)
+}
+
+# Make geometries valid using sf package
+mpsz_2019 <- st_make_valid(mpsz_2019)
+
+message("Records loaded: ", nrow(mpsz_2019))
+message("Geometry type(s): ", paste(unique(st_geometry_type(mpsz_2019)), collapse = ", "))
+message("Subzone attributes: ", paste(head(names(mpsz_2019), 10), collapse = ", "))
+```
+
+### Extract fields from HTML Description
+
+```{r}
+# Function to extract KML fields from HTML description
+extract_kml_field <- function(html_text, field_name) {
+  if (is.na(html_text) || html_text == "") return(NA_character_)
+  
+  page <- read_html(html_text)
+  rows <- page %>% html_elements("tr")
+  
+  value <- rows %>%
+    keep(~ html_text2(html_element(.x, "th")) == field_name) %>%
+    map_chr(~ html_text2(html_element(.x, "td")))
+  
+  if (length(value) == 0) NA_character_ else value[1]
+}
+
+# Extract SUBZONE_N and PLN_AREA_N from Description field
+mpsz_2019 <- mpsz_2019 %>%
+  mutate(
+    subzone_name = map_chr(Description, extract_kml_field, "SUBZONE_N"),
+    planning_area = map_chr(Description, extract_kml_field, "PLN_AREA_N")
+  ) %>%
+  select(-Name, -Description) %>%
+  relocate(geometry, .after = last_col())
+
+# Clean the extracted data
+mpsz_2019 <- mpsz_2019 %>%
+  mutate(
+    subzone_name = str_squish(as.character(subzone_name)),
+    planning_area = str_squish(as.character(planning_area))
+  )
+
+# Display sample data
+subzone_glimpse <- mpsz_2019 %>%
+  st_drop_geometry() %>%
+  select(subzone_name, planning_area) %>%
+  distinct() %>%
+  head(10)
+
+print(subzone_glimpse)
+```
+
+### Child Care Services (Point)
+
+```{r}
+message("\n=== Loading ECDA child care locations ===")
+childcare_path <- file.path(exo_data, "ChildCareServices.geojson")
+
+if (!file.exists(childcare_path)) {
+  stop("Child care services GeoJSON not found at: ", childcare_path,
+       "\nDownload the ECDA dataset and place it in the data directory before knitting.")
+}
+
+childcare_raw <- st_read(childcare_path, quiet = FALSE) %>%
+  janitor::clean_names()
+
+if (is.na(st_crs(childcare_raw))) {
+  stop("Child care services data is missing CRS information. Please check the source file.")
+}
+
+if (st_crs(childcare_raw)$epsg != 3414) {
+  message("Transforming child care locations to EPSG:3414 (SVY21).")
+  childcare_sf <- st_transform(childcare_raw, 3414)
+} else {
+  childcare_sf <- childcare_raw
+}
+
+# Check if Description field contains HTML
+# Check if Description field contains HTML
+if (grepl("<", childcare_sf$description[1], fixed = TRUE)) {
+  # Extract centre name from HTML if present
+  childcare_sf <- childcare_sf %>%
+    mutate(
+      centre_name = map2_chr(description, name, function(desc, nm) {
+        if (is.na(desc) || desc == "") return(nm)
+        # Try to extract centre name from HTML
+        result <- tryCatch({
+          extract_kml_field(desc, "CENTRE_NAME")
+        }, error = function(e) {
+          NA_character_
+        })
+        # If extraction fails, use name field
+        if (is.na(result)) return(nm) else return(result)
+      })
+    )
+} else {
+  # Use name field directly
+  childcare_sf <- childcare_sf %>%
+    mutate(centre_name = name)
+}
+
+childcare_sf <- childcare_sf %>%
+  mutate(across(where(is.character), ~ str_squish(.x)))
+
+message("Records loaded: ", nrow(childcare_sf))
+message("Geometry type(s): ", paste(unique(st_geometry_type(childcare_sf)), collapse = ", "))
+message("Child care attributes (first 10): ", paste(head(names(childcare_sf), 10), collapse = ", "))
+
+# Display sample data
+childcare_sf %>%
+  st_drop_geometry() %>%
+  select(any_of(c("centre_name", "name"))) %>%
+  head(5)
+```
+
+## Spatial Join and Aggregation
+
+### Prepare Helper Columns
+
+```{r}
+# No capacity column in this dataset, so we'll only count centres
+capacity_col <- NA_character_
+message("No capacity column detected; analyses will use only centre counts.")
+
+# Prepare childcare data
+childcare_ready <- childcare_sf %>%
+  mutate(
+    centre_name = coalesce(centre_name, name, "(Unnamed centre)"),
+    capacity = NA_real_  # No capacity data available
+  )
+```
+
+### Spatial Join (Points-in-Polygons)
+
+```{r}
+message("\n=== Computing child care counts per subzone ===")
+childcare_joined <- st_join(childcare_ready, mpsz_2019 %>% select(subzone_name, planning_area),
+                            join = st_within, left = FALSE)
+
+childcare_counts <- childcare_joined %>%
+  st_drop_geometry() %>%
+  group_by(planning_area, subzone_name) %>%
+  summarise(
+    centres = n(),
+    capacity_total = NA_real_,  # No capacity data
+    .groups = "drop"
+  )
+
+has_capacity_information <- FALSE
+
+print(childcare_counts %>% head(10))
+```
+
+### Subzone Summary
+
+```{r}
+subzone_summary <- mpsz_2019 %>%
+  left_join(childcare_counts, by = c("planning_area", "subzone_name")) %>%
+  mutate(
+    centres = replace_na(centres, 0L),
+    capacity_total = NA_real_,  # No capacity data
+    area_sqm = st_area(geometry),
+    area_km2 = units::set_units(area_sqm, km^2) %>% units::drop_units(),
+    centres_per_km2 = if_else(area_km2 > 0, centres / area_km2, NA_real_),
+    capacity_per_km2 = NA_real_  # No capacity data
+  )
+
+subzone_summary %>%
+  st_drop_geometry() %>%
+  arrange(desc(centres)) %>%
+  select(planning_area, subzone_name, centres, centres_per_km2) %>%
+  head(10)
+```
+
+### Planning Area Aggregation
+
+```{r}
+planning_summary <- subzone_summary %>%
+  st_drop_geometry() %>%
+  group_by(planning_area) %>%
+  summarise(
+    centres = sum(centres, na.rm = TRUE),
+    capacity_total = NA_real_,  # No capacity data
+    area_km2 = sum(area_km2, na.rm = TRUE),
+    centres_per_km2 = if_else(area_km2 > 0, centres / area_km2, NA_real_),
+    capacity_per_km2 = NA_real_,  # No capacity data
+    .groups = "drop"
+  ) %>%
+  arrange(desc(centres))
+
+print(planning_summary %>% head(10))
+```
+
+## Visual Analytics
+
+### Point Overlay Map
+
+```{r}
+# Check tmap version and use appropriate syntax
+tmap_version <- packageVersion("tmap")
+
+if (tmap_version >= "4.0") {
+  # tmap v4 syntax
+  childcare_map <- tm_shape(mpsz_2019) +
+    tm_polygons(fill = "grey95", col = "grey70", lwd = 0.3) +
+    tm_shape(childcare_ready) +
+    tm_dots(size = 0.05, fill = "#0072B2", fill_alpha = 0.6) +
+    tm_title("ECDA-registered Child Care Centres") +
+    tm_scalebar(position = c("left", "bottom")) +
+    tm_compass(position = c("right", "top"), size = 1.2) +
+    tm_layout(frame = FALSE)
+} else {
+  # tmap v3 syntax
+  childcare_map <- tm_shape(mpsz_2019) +
+    tm_polygons(col = "grey95", border.col = "grey70", lwd = 0.3) +
+    tm_shape(childcare_ready) +
+    tm_dots(size = 0.05, col = "#0072B2", alpha = 0.6,
+            title = "Child care centres") +
+    tm_layout(
+      title = "ECDA-registered Child Care Centres",
+      frame = FALSE,
+      legend.outside = TRUE,
+      outer.margins = 0.02,
+      main.title.position = "center"
+    ) +
+    tm_scale_bar(position = c("left", "bottom")) +
+    tm_compass(position = c("right", "top"), size = 1.2)
+}
+
+print(childcare_map)
+```
+
+```{r}
+tmap_save(childcare_map,
+          filename = file.path(exo_fig, "ex02a_childcare_points.png"),
+          width = 8, height = 6, units = "in", dpi = 300)
+```
+
+### Choropleth: Centres per Subzone
+
+```{r}
+if (tmap_version >= "4.0") {
+  # tmap v4 syntax
+  centres_map <- tm_shape(subzone_summary) +
+    tm_polygons(
+      fill = "centres",
+      fill.scale = tm_scale_intervals(
+        style = "quantile",
+        n = 5,
+        values = "brewer.reds"
+      ),
+      fill.legend = tm_legend(title = "Centres"),
+      col = "grey60",
+      lwd = 0.3
+    ) +
+    tm_title("Number of Child Care Centres by Subzone") +
+    tm_scalebar(position = c("left", "bottom")) +
+    tm_compass(position = c("right", "top"), size = 1.1) +
+    tm_layout(frame = FALSE)
+} else {
+  # tmap v3 syntax
+  centres_map <- tm_shape(subzone_summary) +
+    tm_polygons(
+      col = "centres",
+      palette = "Reds",
+      style = "quantile",
+      n = 5,
+      border.col = "grey60",
+      lwd = 0.3,
+      title = "Centres"
+    ) +
+    tm_layout(
+      title = "Number of Child Care Centres by Subzone",
+      frame = FALSE,
+      legend.outside = TRUE,
+      main.title.position = "center"
+    ) +
+    tm_scale_bar(position = c("left", "bottom")) +
+    tm_compass(position = c("right", "top"), size = 1.1)
+}
+
+print(centres_map)
+```
+
+```{r}
+tmap_save(centres_map,
+          filename = file.path(exo_fig, "ex02a_childcare_centres.png"),
+          width = 8, height = 6, units = "in", dpi = 300)
+```
+
+### Choropleth: Density of Centres
+
+```{r}
+if (!all(is.na(subzone_summary$centres_per_km2))) {
+  if (tmap_version >= "4.0") {
+    # tmap v4 syntax
+    density_map <- tm_shape(subzone_summary) +
+      tm_polygons(
+        fill = "centres_per_km2",
+        fill.scale = tm_scale_intervals(
+          style = "jenks",
+          n = 5,
+          values = "brewer.blues"
+        ),
+        fill.legend = tm_legend(title = "Centres per km²"),
+        col = "grey60",
+        lwd = 0.3
+      ) +
+      tm_title("Density of Child Care Centres by Subzone") +
+      tm_scalebar(position = c("left", "bottom")) +
+      tm_compass(position = c("right", "top"), size = 1.1) +
+      tm_layout(frame = FALSE)
+  } else {
+    # tmap v3 syntax
+    density_map <- tm_shape(subzone_summary) +
+      tm_polygons(
+        col = "centres_per_km2",
+        palette = "Blues",
+        style = "jenks",
+        n = 5,
+        border.col = "grey60",
+        lwd = 0.3,
+        title = "Centres per km²"
+      ) +
+      tm_layout(
+        title = "Density of Child Care Centres by Subzone",
+        frame = FALSE,
+        legend.outside = TRUE,
+        main.title.position = "center"
+      ) +
+      tm_scale_bar(position = c("left", "bottom")) +
+      tm_compass(position = c("right", "top"), size = 1.1)
+  }
+  
+  print(density_map)
+  
+  tmap_save(density_map,
+            filename = file.path(exo_fig, "ex02a_childcare_density.png"),
+            width = 8, height = 6, units = "in", dpi = 300)
+} else {
+  message("Centres per km² could not be computed (missing area information).")
+}
+```
+
+## Descriptive Summaries
+
+### Overall Statistics
+
+```{r}
+summary_stats <- subzone_summary %>%
+  st_drop_geometry() %>%
+  summarise(
+    total_centres = sum(centres, na.rm = TRUE),
+    mean_centres = mean(centres, na.rm = TRUE),
+    median_centres = median(centres, na.rm = TRUE),
+    max_centres = max(centres, na.rm = TRUE),
+    min_centres = min(centres, na.rm = TRUE),
+    sd_centres = sd(centres, na.rm = TRUE)
+  )
+
+print(summary_stats)
+```
+
+### Top Subzones by Centre Count
+
+```{r}
+top_subzones <- subzone_summary %>%
+  st_drop_geometry() %>%
+  arrange(desc(centres)) %>%
+  select(planning_area, subzone_name, centres, centres_per_km2) %>%
+  head(10)
+
+print(top_subzones)
+```
+
+### Bottom Subzones by Centre Count
+
+```{r}
+bottom_subzones <- subzone_summary %>%
+  st_drop_geometry() %>%
+  filter(centres == 0) %>%
+  select(planning_area, subzone_name, centres, centres_per_km2) %>%
+  head(10)
+
+print(paste("Number of subzones with no childcare centres:", 
+            sum(subzone_summary$centres == 0, na.rm = TRUE)))
+print(bottom_subzones)
+```
+
+### Top Planning Areas
+
+```{r}
+top_planning <- planning_summary %>%
+  arrange(desc(centres)) %>%
+  select(planning_area, centres, area_km2, centres_per_km2) %>%
+  head(10)
+
+print(top_planning)
+```
+
+## Session Information
+
+```{r}
+sessioninfo::session_info()
+```

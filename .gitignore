@@ -23,3 +23,5 @@ Thumbs.db
 
 # DO NOT ignore _site — needed for Netlify static hosting
 #!_site/
+
+/.quarto/
