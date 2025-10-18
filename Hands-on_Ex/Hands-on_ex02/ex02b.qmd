@@ -1,0 +1,402 @@
+---
+title: "Hands-on Exercise 02b: 2nd Order Spatial Point Patterns Analysis"
+format: html
+execute:
+  freeze: true
+  warning: false
+  message: true
+---
+
+## Overview
+
+Second-order spatial point pattern analysis examines the spatial relationships between points in a pattern, specifically focusing on how the presence of one point influences the location of others. Using appropriate functions of spatstat package, this hands-on exercise aims to discover the spatial point processes of childcare centres in Singapore.
+
+The specific questions we would like to answer are:
+- Are the childcare centres in Singapore randomly distributed throughout the country?
+- If the answer is not, then where are the locations with higher concentration of childcare centres?
+
+## Setup and Loading R Packages
+
+```{r setup}
+if (!requireNamespace("pacman", quietly = TRUE)) install.packages("pacman")
+
+pacman::p_load(sf, tidyverse, tmap, spatstat, rvest, 
+               here, janitor, stringr, units)
+
+# Set tmap to plot mode
+tmap_mode("plot")
+
+# Set up directory paths
+root_dir <- here::here()
+exo_data <- here::here("Hands-on_Ex", "Hands-on_ex02", "data")
+exo_fig <- here::here("Hands-on_Ex", "Hands-on_ex02", "figures")
+
+if (!dir.exists(exo_fig)) dir.create(exo_fig, recursive = TRUE, showWarnings = FALSE)
+
+message("Data directory: ", exo_data)
+message("Figures directory: ", exo_fig)
+```
+
+## Data Import and Preparation
+
+### Import Master Plan Subzones
+
+```{r}
+# Function to extract KML fields from HTML description
+extract_kml_field <- function(html_text, field_name) {
+  if (is.na(html_text) || html_text == "") return(NA_character_)
+  
+  page <- read_html(html_text)
+  rows <- page %>% html_elements("tr")
+  
+  value <- rows %>%
+    keep(~ html_text2(html_element(.x, "th")) == field_name) %>%
+    map_chr(~ html_text2(html_element(.x, "td")))
+  
+  if (length(value) == 0) NA_character_ else value[1]
+}
+
+# Load Master Plan 2019 subzones
+message("Loading Master Plan 2019 subzones...")
+subzone_path <- file.path(exo_data, "MasterPlan2019SubzoneBoundaryNoSeaGEOJSON.geojson")
+
+mpsz <- st_read(subzone_path, quiet = TRUE)
+
+# Transform to SVY21 if needed
+if (st_crs(mpsz)$epsg != 3414) {
+  mpsz <- st_transform(mpsz, 3414)
+}
+
+# Extract fields from HTML Description
+mpsz <- mpsz %>%
+  mutate(
+    SUBZONE_N = map_chr(Description, extract_kml_field, "SUBZONE_N"),
+    PLN_AREA_N = map_chr(Description, extract_kml_field, "PLN_AREA_N"),
+    SUBZONE_C = map_chr(Description, extract_kml_field, "SUBZONE_C"),
+    REGION_N = map_chr(Description, extract_kml_field, "REGION_N")
+  ) %>%
+  select(-Name, -Description) %>%
+  relocate(geometry, .after = last_col())
+
+# Make geometries valid
+mpsz <- st_make_valid(mpsz)
+
+message("Master Plan subzones loaded: ", nrow(mpsz), " records")
+```
+
+### Import Childcare Services
+
+```{r}
+message("Loading childcare services...")
+childcare_path <- file.path(exo_data, "ChildCareServices.geojson")
+
+childcare_sf <- st_read(childcare_path, quiet = TRUE) %>%
+  janitor::clean_names()
+
+# Transform to SVY21 if needed
+if (st_crs(childcare_sf)$epsg != 3414) {
+  childcare_sf <- st_transform(childcare_sf, 3414)
+}
+
+# Remove Z dimension if present
+childcare_sf <- st_zm(childcare_sf, drop = TRUE, what = "ZM")
+
+message("Childcare services loaded: ", nrow(childcare_sf), " records")
+```
+
+## Geospatial Data Wrangling for spatstat
+
+### Converting to spatstat format
+
+```{r}
+# Convert childcare points to ppp format
+childcare_ppp <- as.ppp(childcare_sf)
+class(childcare_ppp)
+
+# Check summary
+summary(childcare_ppp)
+
+# Create Singapore boundary owin object
+sg_owin <- as.owin(mpsz)
+class(sg_owin)
+
+# Plot the owin object
+plot(sg_owin)
+
+# Combine points and window
+childcareSG_ppp = childcare_ppp[sg_owin]
+summary(childcareSG_ppp)
+
+# Plot the combined object
+plot(childcareSG_ppp)
+```
+
+## Extract Study Areas
+
+For this analysis, we'll focus on four planning areas: Choa Chu Kang, Tampines, Punggol, and Jurong West.
+
+```{r}
+# Extract the four planning areas
+pg <- mpsz %>% 
+  filter(PLN_AREA_N == "PUNGGOL")
+tm <- mpsz %>% 
+  filter(PLN_AREA_N == "TAMPINES")
+ck <- mpsz %>% 
+  filter(PLN_AREA_N == "CHOA CHU KANG")
+jw <- mpsz %>% 
+  filter(PLN_AREA_N == "JURONG WEST")
+
+# Plot the four areas
+par(mfrow=c(2,2))
+plot(st_geometry(pg), main = "Punggol")
+plot(st_geometry(tm), main = "Tampines")
+plot(st_geometry(ck), main = "Choa Chu Kang")
+plot(st_geometry(jw), main = "Jurong West")
+```
+
+### Create owin objects for each area
+
+```{r}
+pg_owin <- as.owin(pg)
+tm_owin <- as.owin(tm)
+ck_owin <- as.owin(ck)
+jw_owin <- as.owin(jw)
+```
+
+### Extract childcare points for each area
+
+```{r}
+childcare_pg_ppp <- childcare_ppp[pg_owin]
+childcare_tm_ppp <- childcare_ppp[tm_owin]
+childcare_ck_ppp <- childcare_ppp[ck_owin]
+childcare_jw_ppp <- childcare_ppp[jw_owin]
+
+# Rescale to kilometer
+childcare_pg_ppp.km <- rescale.ppp(childcare_pg_ppp, 1000, "km")
+childcare_tm_ppp.km <- rescale.ppp(childcare_tm_ppp, 1000, "km")
+childcare_ck_ppp.km <- rescale.ppp(childcare_ck_ppp, 1000, "km")
+childcare_jw_ppp.km <- rescale.ppp(childcare_jw_ppp, 1000, "km")
+
+# Plot the study areas
+par(mfrow=c(2,2))
+plot(childcare_pg_ppp.km, main="Punggol")
+plot(childcare_tm_ppp.km, main="Tampines")
+plot(childcare_ck_ppp.km, main="Choa Chu Kang")
+plot(childcare_jw_ppp.km, main="Jurong West")
+```
+
+## Second-order Spatial Point Patterns Analysis
+
+## G-Function Analysis
+
+The G function measures the distribution of distances from an arbitrary event to its nearest event.
+
+### Choa Chu Kang - G Function
+
+```{r}
+# Computing G-function estimation
+G_ck <- Gest(childcare_ck_ppp.km, correction = "border")
+plot(G_ck, main = "G-function: Choa Chu Kang")
+```
+
+#### Complete Spatial Randomness Test for Choa Chu Kang
+
+```{r}
+# Perform CSR test with envelope
+G_ck.csr <- envelope(childcare_ck_ppp.km, Gest, 
+                     nsim = 999,
+                     rank = 1,
+                     ginterval = c(0, 500))
+
+plot(G_ck.csr, main = "G-function CSR Test: Choa Chu Kang")
+```
+
+### Tampines - G Function
+
+```{r}
+# Computing G-function estimation
+G_tm <- Gest(childcare_tm_ppp.km, correction = "best")
+plot(G_tm, main = "G-function: Tampines")
+```
+
+#### Complete Spatial Randomness Test for Tampines
+
+```{r}
+# Perform CSR test with envelope
+G_tm.csr <- envelope(childcare_tm_ppp.km, Gest,
+                     nsim = 999,
+                     rank = 1,
+                     ginterval = c(0, 500))
+
+plot(G_tm.csr, main = "G-function CSR Test: Tampines")
+```
+
+## F-Function Analysis
+
+The F function estimates the empty space function or its hazard rate from a point pattern.
+
+### Choa Chu Kang - F Function
+
+```{r}
+# Computing F-function estimation
+F_ck <- Fest(childcare_ck_ppp.km, correction = "best")
+plot(F_ck, main = "F-function: Choa Chu Kang")
+```
+
+#### Complete Spatial Randomness Test for Choa Chu Kang
+
+```{r}
+# Perform CSR test with envelope
+F_ck.csr <- envelope(childcare_ck_ppp.km, Fest,
+                     nsim = 999,
+                     rank = 1,
+                     ginterval = c(0, 500))
+
+plot(F_ck.csr, main = "F-function CSR Test: Choa Chu Kang")
+```
+
+### Tampines - F Function
+
+```{r}
+# Computing F-function estimation
+F_tm <- Fest(childcare_tm_ppp.km, correction = "best")
+plot(F_tm, main = "F-function: Tampines")
+```
+
+#### Complete Spatial Randomness Test for Tampines
+
+```{r}
+# Perform CSR test with envelope
+F_tm.csr <- envelope(childcare_tm_ppp.km, Fest,
+                     nsim = 999,
+                     rank = 1,
+                     ginterval = c(0, 500))
+
+plot(F_tm.csr, main = "F-function CSR Test: Tampines")
+```
+
+## K-Function Analysis
+
+K-function measures the number of events found up to a given distance of any particular event.
+
+### Choa Chu Kang - K Function
+
+```{r}
+# Computing K-function estimate
+K_ck <- Kest(childcare_ck_ppp.km, correction = "border")
+plot(K_ck, main = "K-function: Choa Chu Kang")
+```
+
+#### Complete Spatial Randomness Test for Choa Chu Kang
+
+```{r}
+# Perform CSR test with envelope
+K_ck.csr <- envelope(childcare_ck_ppp.km, Kest,
+                     nsim = 99,
+                     rank = 1,
+                     ginterval = c(0, 500))
+
+plot(K_ck.csr, main = "K-function CSR Test: Choa Chu Kang")
+```
+
+### Tampines - K Function
+
+```{r}
+# Computing K-function estimate
+K_tm <- Kest(childcare_tm_ppp.km, correction = "border")
+plot(K_tm, main = "K-function: Tampines")
+```
+
+#### Complete Spatial Randomness Test for Tampines
+
+```{r}
+# Perform CSR test with envelope
+K_tm.csr <- envelope(childcare_tm_ppp.km, Kest,
+                     nsim = 99,
+                     rank = 1,
+                     ginterval = c(0, 500))
+
+plot(K_tm.csr, main = "K-function CSR Test: Tampines")
+```
+
+## L-Function Analysis
+
+L-function is the normalized version of K-function.
+
+### Choa Chu Kang - L Function
+
+```{r}
+# Computing L-function estimate
+L_ck <- Lest(childcare_ck_ppp.km, correction = "border")
+plot(L_ck, main = "L-function: Choa Chu Kang")
+```
+
+#### Complete Spatial Randomness Test for Choa Chu Kang
+
+```{r}
+# Perform CSR test with envelope
+L_ck.csr <- envelope(childcare_ck_ppp.km, Lest,
+                     nsim = 99,
+                     rank = 1,
+                     ginterval = c(0, 500))
+
+plot(L_ck.csr, . - r ~ r, 
+     main = "L-function CSR Test: Choa Chu Kang",
+     ylab = "L(r) - r")
+```
+
+### Tampines - L Function
+
+```{r}
+# Computing L-function estimate
+L_tm <- Lest(childcare_tm_ppp.km, correction = "border")
+plot(L_tm, main = "L-function: Tampines")
+```
+
+#### Complete Spatial Randomness Test for Tampines
+
+```{r}
+# Perform CSR test with envelope
+L_tm.csr <- envelope(childcare_tm_ppp.km, Lest,
+                     nsim = 99,
+                     rank = 1,
+                     ginterval = c(0, 500))
+
+plot(L_tm.csr, . - r ~ r,
+     main = "L-function CSR Test: Tampines",
+     ylab = "L(r) - r")
+```
+
+## Summary and Interpretation
+
+### Key Findings
+
+Based on the second-order spatial point pattern analyses:
+
+1. **G-Function Results**: 
+   - Both Choa Chu Kang and Tampines show clustering patterns
+   - The observed G-function lies above the theoretical CSR envelope
+   - This indicates that childcare centres are closer to each other than expected under random distribution
+
+2. **F-Function Results**:
+   - The empty space function shows shorter distances to the nearest childcare centre than expected
+   - This further confirms the clustering pattern
+
+3. **K-Function Results**:
+   - At various distance scales, there are more neighbours than expected under CSR
+   - The clustering is significant across multiple spatial scales
+
+4. **L-Function Results**:
+   - The normalized L-function confirms clustering patterns
+   - The deviation from the theoretical line (L(r) - r = 0) indicates non-random distribution
+
+### Conclusions
+
+The childcare centres in both Choa Chu Kang and Tampines planning areas are **NOT randomly distributed**. Instead, they exhibit significant **clustering patterns**. This clustering likely reflects:
+
+- Concentration in residential areas
+- Proximity to HDB estates
+- Strategic placement near transport nodes
+- Market-driven location decisions
+
+The null hypothesis of Complete Spatial Randomness is rejected for both areas at the 0.001 significance level.

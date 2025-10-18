@@ -16,6 +16,8 @@ website:
             href: Hands-on_Ex/Hands-on_ex01/ex01b.qmd
           - text: Ex02a · Child Care Choropleth
             href: Hands-on_Ex/Hands-on_ex02/ex02a.qmd
+          - text: Ex02b · Spatial Weights & Autocorrelation
+            href: Hands-on_Ex/Hands-on_ex02/ex02b.qmd
       - text: In-class
         href: In-class_Ex/index.qmd
       - text: Take-home
