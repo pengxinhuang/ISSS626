@@ -1,0 +1,790 @@
+---
+title: "Hands-on Exercise 06: Spatially Constrained Clustering - Geospatial Analytics for Social Good"
+author: "Huang Pengxin"
+date: "2025-01-07"
+date-modified: "last-modified"
+execute:
+  eval: true
+  echo: true
+  warning: false
+  freeze: true
+---
+
+## 1. Overview
+
+In this hands-on exercise, we will learn how to perform spatially constrained clustering using Myanmar township data. We will explore three clustering methods:
+
+1. **Hierarchical clustering** (non-spatial)
+2. **SKATER** (Spatial 'K'luster Analysis by Tree Edge Removal)
+3. **ClustGeo** (Hierarchical clustering with spatial constraints)
+
+The analysis focuses on ICT (Information and Communication Technology) development patterns in Shan State, Myanmar.
+
+## 2. Getting Started
+
+### 2.1 Loading Required Packages
+```{r}
+#| code-fold: false
+pacman::p_load(sf, tidyverse, tmap, spdep, cluster, 
+               ClustGeo, heatmaply, GGally, 
+               factoextra, NbClust, corrplot, 
+               ggpubr, plotly, psych, DT)
+```
+
+### 2.2 Data Import
+
+#### 2.2.1 Import Geospatial Data
+```{r}
+#| code-fold: false
+# Import Myanmar township boundaries
+myanmar_sf <- st_read(dsn = "data/geospatial", 
+                       layer = "myanmar_township_boundaries",
+                       quiet = TRUE) %>%
+  st_transform(crs = 32647)  # Transform to UTM Zone 47N for Myanmar
+
+# Check the data structure
+glimpse(myanmar_sf)
+
+# Display first few rows
+head(myanmar_sf, n = 3)
+```
+
+#### 2.2.2 Import ICT Indicator Data
+```{r}
+#| code-fold: false
+# Read ICT data
+ict <- read_csv("data/aspatial/Shan-ICT.csv",
+                show_col_types = FALSE)
+
+# Check data structure
+glimpse(ict)
+
+# Display summary statistics
+summary(ict[,5:11])  # Assuming ICT indicators are in columns 5-11
+```
+
+## 3. Data Wrangling
+
+### 3.1 Extract Shan State
+```{r}
+#| code-fold: false
+# Filter townships in Shan State
+shan_sf <- myanmar_sf %>%
+  filter(ST %in% c("Shan (East)", "Shan (North)", "Shan (South)"))
+
+# Check the result
+cat("Number of townships in Shan State:", nrow(shan_sf), "\n")
+unique(shan_sf$ST)
+
+# Plot to verify
+tmap_mode("plot")
+tm_shape(shan_sf) +
+  tm_polygons("ST", 
+              palette = "Set2",
+              title = "Shan State") +
+  tm_layout(main.title = "Townships in Shan State, Myanmar",
+            main.title.size = 1.2,
+            legend.position = c("right", "bottom"))
+```
+
+### 3.2 Join Geospatial and Aspatial Data
+```{r}
+#| code-fold: false
+# Prepare join key - ensure column names match
+# Check column names first
+cat("Shapefile columns:\n")
+print(names(shan_sf))
+cat("\nICT data columns:\n")
+print(names(ict))
+
+# Perform the join - 注意列名有空格！
+# TS_PCODE in shapefile matches with "Township Pcode" in ICT data
+shan_ict <- left_join(shan_sf, 
+                      ict, 
+                      by = c("TS_PCODE" = "Township Pcode"))
+
+# Alternative: 如果上面的还是不行，可以先重命名ICT的列
+# ict <- ict %>%
+#   rename(TS_PCODE = `Township Pcode`,
+#          DT_PCODE = `District Pcode`,
+#          Total_households = `Total households`,
+#          Land_line_phone = `Land line phone`,
+#          Mobile_phone = `Mobile phone`,
+#          Internet_at_home = `Internet at home`)
+# 
+# shan_ict <- left_join(shan_sf, ict, by = "TS_PCODE")
+
+# Check for missing values after join
+missing_check <- shan_ict %>%
+  st_drop_geometry() %>%
+  select(Radio, Television, 
+         `Land line phone`, `Mobile phone`, 
+         Computer, `Internet at home`) %>%
+  summarise_all(~sum(is.na(.)))
+
+print("Missing values in ICT columns:")
+print(missing_check)
+
+# Check if join was successful
+cat("\nNumber of rows after join:", nrow(shan_ict), "\n")
+cat("Number of townships with ICT data:", 
+    sum(!is.na(shan_ict$Radio)), "\n")
+```
+
+### 3.3 Derive ICT Penetration Rates
+```{r}
+#| code-fold: false
+# Calculate penetration rates (per 1000 households)
+# 注意列名有空格，需要使用反引号
+shan_ict <- shan_ict %>%
+  mutate(
+    RADIO_PR = Radio / `Total households` * 1000,
+    TV_PR = Television / `Total households` * 1000,
+    LLPHONE_PR = `Land line phone` / `Total households` * 1000,
+    MOBILE_PR = `Mobile phone` / `Total households` * 1000,
+    COMPUTER_PR = Computer / `Total households` * 1000,
+    INTERNET_PR = `Internet at home` / `Total households` * 1000
+  )
+
+# Check the calculated rates
+summary(shan_ict[c("RADIO_PR", "TV_PR", "LLPHONE_PR", 
+                   "MOBILE_PR", "COMPUTER_PR", "INTERNET_PR")])
+
+# Check for any infinite or NaN values (divide by zero)
+inf_check <- shan_ict %>%
+  st_drop_geometry() %>%
+  select(RADIO_PR:INTERNET_PR) %>%
+  summarise_all(~sum(is.infinite(.))) 
+
+nan_check <- shan_ict %>%
+  st_drop_geometry() %>%
+  select(RADIO_PR:INTERNET_PR) %>%
+  summarise_all(~sum(is.nan(.)))
+
+print("Infinite values:")
+print(inf_check)
+print("NaN values:")
+print(nan_check)
+```
+
+### 3.4 Data Cleaning
+```{r}
+#| code-fold: false
+# Save the complete dataset first
+write_rds(shan_ict, "data/rds/shan_ict_complete.rds")
+
+# Remove rows with missing values in penetration rates
+shan_ict_clean <- shan_ict %>%
+  filter(complete.cases(RADIO_PR, TV_PR, LLPHONE_PR, 
+                        MOBILE_PR, COMPUTER_PR, INTERNET_PR))
+
+cat("Rows before cleaning:", nrow(shan_ict), "\n")
+cat("Rows after cleaning:", nrow(shan_ict_clean), "\n")
+cat("Rows removed:", nrow(shan_ict) - nrow(shan_ict_clean), "\n")
+```
+
+## 4. Exploratory Data Analysis
+
+### 4.1 Statistical Summary
+```{r}
+#| code-fold: false
+# Create summary table for ICT indicators
+ict_vars <- shan_ict_clean %>%
+  st_drop_geometry() %>%
+  select(RADIO_PR, TV_PR, LLPHONE_PR, MOBILE_PR, COMPUTER_PR, INTERNET_PR)
+
+# Summary statistics
+describe(ict_vars)
+```
+
+### 4.2 Distribution of ICT Indicators
+```{r}
+#| code-fold: false
+#| fig-width: 12
+#| fig-height: 8
+# Create histogram for each ICT indicator
+ict_long <- ict_vars %>%
+  pivot_longer(everything(), 
+               names_to = "ICT_Type", 
+               values_to = "Rate")
+
+p1 <- ggplot(ict_long, aes(x = Rate)) +
+  geom_histogram(bins = 20, fill = "steelblue", color = "white") +
+  facet_wrap(~ ICT_Type, scales = "free", ncol = 3) +
+  theme_minimal() +
+  labs(title = "Distribution of ICT Penetration Rates",
+       subtitle = "Per 1000 households",
+       x = "Penetration Rate", y = "Frequency")
+
+print(p1)
+```
+
+### 4.3 Correlation Analysis
+```{r}
+#| code-fold: false
+#| fig-width: 8
+#| fig-height: 8
+# Correlation matrix
+cor_matrix <- cor(ict_vars, use = "complete.obs")
+corrplot(cor_matrix, 
+         method = "circle", 
+         type = "upper", 
+         order = "hclust",
+         tl.col = "black",
+         tl.srt = 45,
+         title = "Correlation Matrix of ICT Indicators",
+         mar = c(0,0,2,0))
+```
+
+### 4.4 Spatial Distribution
+```{r}
+#| code-fold: false
+#| fig-width: 12
+#| fig-height: 10
+# Create maps for each ICT indicator
+tmap_mode("plot")
+
+tm1 <- tm_shape(shan_ict_clean) +
+  tm_polygons("RADIO_PR", 
+              style = "quantile",
+              palette = "Blues",
+              title = "Radio") +
+  tm_layout(main.title = "Radio Penetration",
+            main.title.size = 0.8)
+
+tm2 <- tm_shape(shan_ict_clean) +
+  tm_polygons("TV_PR",
+              style = "quantile", 
+              palette = "Greens",
+              title = "Television") +
+  tm_layout(main.title = "TV Penetration",
+            main.title.size = 0.8)
+
+tm3 <- tm_shape(shan_ict_clean) +
+  tm_polygons("MOBILE_PR",
+              style = "quantile",
+              palette = "Oranges",
+              title = "Mobile Phone") +
+  tm_layout(main.title = "Mobile Penetration",
+            main.title.size = 0.8)
+
+tm4 <- tm_shape(shan_ict_clean) +
+  tm_polygons("INTERNET_PR",
+              style = "quantile",
+              palette = "Purples",
+              title = "Internet") +
+  tm_layout(main.title = "Internet Penetration",
+            main.title.size = 0.8)
+
+tmap_arrange(tm1, tm2, tm3, tm4, ncol = 2)
+```
+
+## 5. Hierarchical Clustering (Non-Spatial)
+
+### 5.1 Data Preparation
+```{r}
+#| code-fold: false
+# Extract clustering variables
+cluster_vars <- shan_ict_clean %>%
+  st_drop_geometry() %>%
+  select(TS_PCODE, RADIO_PR, TV_PR, LLPHONE_PR, 
+         MOBILE_PR, COMPUTER_PR, INTERNET_PR) %>%
+  column_to_rownames("TS_PCODE")
+
+# Check for any remaining NA values
+if(any(is.na(cluster_vars))) {
+  cat("Warning: NA values found. Removing incomplete cases.\n")
+  cluster_vars <- na.omit(cluster_vars)
+}
+
+# Standardize the variables
+cluster_vars_scaled <- scale(cluster_vars)
+summary(cluster_vars_scaled)
+```
+
+### 5.2 Computing Distance Matrix
+```{r}
+#| code-fold: false
+# Compute Euclidean distance
+dist_matrix <- dist(cluster_vars_scaled, method = "euclidean")
+```
+
+### 5.3 Hierarchical Clustering
+```{r}
+#| code-fold: false
+# Perform hierarchical clustering using Ward method
+hclust_ward <- hclust(dist_matrix, method = "ward.D2")
+
+# Plot dendrogram
+plot(hclust_ward, cex = 0.6, hang = -1,
+     main = "Hierarchical Clustering Dendrogram (Ward Method)",
+     xlab = "Township", sub = "")
+```
+
+### 5.4 Determine Optimal Number of Clusters
+```{r}
+#| code-fold: false
+#| fig-width: 12
+#| fig-height: 5
+# Elbow method
+fviz_nbclust(cluster_vars_scaled, 
+             FUN = hcut, 
+             method = "wss",
+             k.max = 10) +
+  labs(title = "Elbow Method for Optimal Clusters")
+
+# Silhouette method
+fviz_nbclust(cluster_vars_scaled,
+             FUN = hcut,
+             method = "silhouette",
+             k.max = 10) +
+  labs(title = "Silhouette Method for Optimal Clusters")
+```
+
+### 5.5 Cutting the Dendrogram
+```{r}
+#| code-fold: false
+# Cut tree to form 5 clusters (adjust based on optimal k)
+groups <- cutree(hclust_ward, k = 5)
+
+# Add cluster membership to data
+shan_ict_clean$CLUSTER_HC <- as.factor(groups[rownames(cluster_vars)])
+
+# Summary of clusters
+table(shan_ict_clean$CLUSTER_HC)
+```
+
+### 5.6 Visualize Clustering Results
+```{r}
+#| code-fold: false
+#| fig-width: 8
+#| fig-height: 6
+# Plot dendrogram with cluster boxes
+plot(hclust_ward, cex = 0.6, hang = -1,
+     main = "Hierarchical Clustering with 5 Clusters")
+rect.hclust(hclust_ward, k = 5, border = 2:6)
+```
+
+## 6. Spatially Constrained Clustering - SKATER
+
+### 6.1 Create Spatial Neighbors
+```{r}
+#| code-fold: false
+# Create spatial neighbors using Queen contiguity
+coords <- st_coordinates(st_centroid(shan_ict_clean))
+k_neighbors <- knn2nb(knearneigh(coords, k = 6), 
+                      row.names = shan_ict_clean$TS_PCODE)
+
+# Convert to neighbor list
+nb_queen <- poly2nb(shan_ict_clean, queen = TRUE)
+
+# Check neighbor summary
+summary(nb_queen)
+```
+
+### 6.2 Calculate Edge Costs
+```{r}
+#| code-fold: false
+# Calculate edge costs based on dissimilarity
+lcosts <- nbcosts(nb_queen, cluster_vars_scaled)
+
+# Create weights object
+nb_weights <- nb2listw(nb_queen, 
+                       lcosts, 
+                       style = "B")
+
+# Check the weights
+summary(unlist(nb_weights$weights))
+```
+
+### 6.3 Compute Minimum Spanning Tree
+```{r}
+#| code-fold: false
+# Create minimum spanning tree
+shan_mst <- mstree(nb_weights)
+
+# Check MST
+class(shan_mst)
+dim(shan_mst)
+head(shan_mst)
+```
+
+### 6.4 SKATER Clustering
+```{r}
+#| code-fold: false
+# Perform SKATER clustering
+skater_result <- skater(edges = shan_mst[,1:2], 
+                        data = cluster_vars_scaled, 
+                        ncuts = 4)  # Creates 5 clusters
+
+# Extract cluster membership
+shan_ict_clean$CLUSTER_SKATER <- as.factor(skater_result$groups)
+
+# Summary of SKATER clusters
+table(shan_ict_clean$CLUSTER_SKATER)
+```
+
+### 6.5 Visualize SKATER Results
+```{r}
+#| code-fold: false
+#| fig-width: 10
+#| fig-height: 8
+# Plot SKATER clustering results
+tm_shape(shan_ict_clean) +
+  tm_polygons("CLUSTER_SKATER",
+              palette = "Set2",
+              title = "SKATER Clusters") +
+  tm_borders(alpha = 0.5) +
+  tm_layout(main.title = "Spatially Constrained Clustering (SKATER)",
+            main.title.size = 1.2,
+            legend.position = c("right", "bottom"))
+```
+
+## 7. Spatially Constrained Clustering - ClustGeo
+
+### 7.1 Calculate Distance Matrices
+```{r}
+#| code-fold: false
+# Non-spatial distance matrix (attribute distance)
+dist_attrib <- dist(cluster_vars_scaled)
+
+# Spatial distance matrix
+dist_spatial <- st_distance(shan_ict_clean, shan_ict_clean)
+dist_spatial <- as.dist(as.matrix(dist_spatial))
+```
+
+### 7.2 Determine Optimal Alpha
+```{r}
+#| code-fold: false
+#| fig-width: 10
+#| fig-height: 6
+# Test different alpha values
+alpha_values <- seq(0, 1, 0.1)
+clustgeo_results <- list()
+
+for(alpha in alpha_values) {
+  clustgeo_results[[as.character(alpha)]] <- 
+    hclustgeo(D0 = dist_attrib, 
+              D1 = dist_spatial, 
+              alpha = alpha)
+}
+
+# Create plot to choose optimal alpha
+choicealpha(D0 = dist_attrib, 
+            D1 = dist_spatial, 
+            range.alpha = alpha_values, 
+            K = 5, 
+            graph = TRUE)
+```
+
+### 7.3 ClustGeo with Optimal Alpha
+```{r}
+#| code-fold: false
+# Perform ClustGeo with optimal alpha (example: 0.3)
+clustgeo_final <- hclustgeo(D0 = dist_attrib,
+                            D1 = dist_spatial,
+                            alpha = 0.3)
+
+# Cut tree to get clusters
+shan_ict_clean$CLUSTER_GEO <- as.factor(cutree(clustgeo_final, k = 5))
+
+# Summary
+table(shan_ict_clean$CLUSTER_GEO)
+```
+
+### 7.4 Visualize ClustGeo Results
+```{r}
+#| code-fold: false
+#| fig-width: 10
+#| fig-height: 8
+# Map ClustGeo results
+tm_shape(shan_ict_clean) +
+  tm_polygons("CLUSTER_GEO",
+              palette = "Set3",
+              title = "ClustGeo Clusters") +
+  tm_borders(alpha = 0.5) +
+  tm_layout(main.title = "ClustGeo Clustering (α = 0.3)",
+            main.title.size = 1.2,
+            legend.position = c("right", "bottom"))
+```
+
+## 8. Cluster Evaluation and Comparison
+
+### 8.1 Compare All Three Methods
+```{r}
+#| code-fold: false
+#| fig-width: 15
+#| fig-height: 5
+# Create comparison maps
+tm1 <- tm_shape(shan_ict_clean) +
+  tm_polygons("CLUSTER_HC",
+              palette = "Set2",
+              title = "Clusters") +
+  tm_layout(main.title = "Hierarchical",
+            main.title.size = 0.9,
+            legend.position = c("right", "bottom"))
+
+tm2 <- tm_shape(shan_ict_clean) +
+  tm_polygons("CLUSTER_SKATER",
+              palette = "Set2",
+              title = "Clusters") +
+  tm_layout(main.title = "SKATER",
+            main.title.size = 0.9,
+            legend.position = c("right", "bottom"))
+
+tm3 <- tm_shape(shan_ict_clean) +
+  tm_polygons("CLUSTER_GEO",
+              palette = "Set2",
+              title = "Clusters") +
+  tm_layout(main.title = "ClustGeo",
+            main.title.size = 0.9,
+            legend.position = c("right", "bottom"))
+
+tmap_arrange(tm1, tm2, tm3, ncol = 3)
+```
+
+### 8.2 Cluster Profiles
+```{r}
+#| code-fold: false
+# Calculate mean values for each cluster
+cluster_profiles_hc <- shan_ict_clean %>%
+  st_drop_geometry() %>%
+  group_by(CLUSTER_HC) %>%
+  summarise(across(c(RADIO_PR, TV_PR, LLPHONE_PR, 
+                     MOBILE_PR, COMPUTER_PR, INTERNET_PR), 
+                   mean, na.rm = TRUE)) %>%
+  mutate(Method = "Hierarchical")
+
+cluster_profiles_skater <- shan_ict_clean %>%
+  st_drop_geometry() %>%
+  group_by(CLUSTER_SKATER) %>%
+  summarise(across(c(RADIO_PR, TV_PR, LLPHONE_PR, 
+                     MOBILE_PR, COMPUTER_PR, INTERNET_PR), 
+                   mean, na.rm = TRUE)) %>%
+  mutate(Method = "SKATER") %>%
+  rename(Cluster = CLUSTER_SKATER)
+
+cluster_profiles_geo <- shan_ict_clean %>%
+  st_drop_geometry() %>%
+  group_by(CLUSTER_GEO) %>%
+  summarise(across(c(RADIO_PR, TV_PR, LLPHONE_PR, 
+                     MOBILE_PR, COMPUTER_PR, INTERNET_PR), 
+                   mean, na.rm = TRUE)) %>%
+  mutate(Method = "ClustGeo") %>%
+  rename(Cluster = CLUSTER_GEO)
+
+# Display profiles
+knitr::kable(cluster_profiles_hc, 
+             caption = "Hierarchical Clustering Profiles",
+             digits = 2)
+```
+
+### 8.3 Interactive Heatmap
+```{r}
+#| code-fold: false
+#| fig-width: 10
+#| fig-height: 6
+
+# 期望使用的列名与友好展示名
+col_map <- c(
+  RADIO_PR    = "Radio",
+  TV_PR       = "TV",
+  LLPHONE_PR  = "Landline",
+  MOBILE_PR   = "Mobile",
+  COMPUTER_PR = "Computer",
+  INTERNET_PR = "Internet"
+)
+
+# ---- 1) 预处理：容错处理列名/类型 ----
+stopifnot("shan_ict_clean" %in% ls())
+
+dat <- shan_ict_clean
+
+# 兼容：若存在 LANDLINE_PR 列但没有 LLPHONE_PR，则做别名
+if (!"LLPHONE_PR" %in% names(dat) && "LANDLINE_PR" %in% names(dat)) {
+  dat <- dplyr::mutate(dat, LLPHONE_PR = .data$LANDLINE_PR)
+}
+
+# 需要的列中，哪些真实存在
+cols_present <- intersect(names(col_map), names(dat))
+
+# 如果一个都没有，给出提示并优雅退出本节绘图
+if (length(cols_present) == 0L) {
+  cat("**Note:** No ICT rate columns found in data. Skipping cluster summary/plot.\n")
+} else {
+  # 分群列检查
+  if (!"CLUSTER_HC" %in% names(dat)) {
+    stop("Missing `CLUSTER_HC` column. Please create the cluster labels first.")
+  }
+  dat <- dplyr::mutate(dat, CLUSTER_HC = as.factor(.data$CLUSTER_HC))
+
+  # ---- 2) 汇总表（自动跳过全 NA 列）----
+  # 只保留真的有观测值的列
+  keep_cols <- purrr::map_lgl(cols_present, ~ sum(!is.na(dat[[.x]])) > 0)
+  cols_present <- cols_present[keep_cols]
+
+  # 若清洗后列不足 1，同样优雅退出
+  if (length(cols_present) == 0L) {
+    cat("**Note:** All ICT rate columns are entirely NA. Skipping cluster summary/plot.\n")
+  } else {
+    cluster_summary <- dat |>
+      sf::st_drop_geometry() |>
+      dplyr::group_by(CLUSTER_HC) |>
+      dplyr::summarise(
+        Count = dplyr::n(),
+        dplyr::across(
+          dplyr::all_of(cols_present),
+          ~ round(mean(.x, na.rm = TRUE), 1)
+        ),
+        .groups = "drop"
+      )
+
+    # 用友好名重命名（只对实际存在的列）
+    pretty_names <- unname(col_map[cols_present])
+    cluster_summary <- dplyr::rename(
+      cluster_summary,
+      !!!setNames(cols_present, pretty_names)  # new = old
+    )
+
+    # 打印表格
+    knitr::kable(
+      cluster_summary,
+      caption = "Mean ICT Penetration Rates by Cluster"
+    )
+
+    # ---- 3) 条形图（长表）----
+    value_cols <- pretty_names  # 已经改成友好名后的列
+    cluster_long <- cluster_summary |>
+      tidyr::pivot_longer(
+        cols = dplyr::any_of(value_cols),
+        names_to = "ICT_Type",
+        values_to = "Rate"
+      )
+
+    # 若还存在 Rate 全 NA 的情况，过滤掉
+    cluster_long <- dplyr::filter(cluster_long, !is.na(Rate))
+
+    if (nrow(cluster_long) == 0L) {
+      cat("**Note:** No non-missing values available for plotting.\n")
+    } else {
+      cluster_long$ICT_Type <- factor(
+        cluster_long$ICT_Type,
+        levels = c("Radio","TV","Landline","Mobile","Computer","Internet")
+      )
+
+      ggplot(cluster_long, aes(x = ICT_Type, y = Rate, fill = CLUSTER_HC)) +
+        geom_col(position = "dodge") +
+        scale_fill_brewer(palette = "Set2") +
+        theme_minimal() +
+        labs(
+          title = "ICT Penetration by Cluster",
+          x = NULL, y = "Mean Penetration (%)",
+          fill = "Cluster"
+        )
+    }
+  }
+}
+```
+
+### 8.4 Parallel Coordinates Plot
+```{r}
+#| code-fold: false
+#| fig-width: 12
+#| fig-height: 8
+
+# 准备数据 - 转换为长格式
+parallel_data <- shan_ict_clean %>%
+  st_drop_geometry() %>%
+  select(TS_PCODE, CLUSTER_HC, RADIO_PR:INTERNET_PR) %>%
+  mutate(CLUSTER_HC = as.factor(CLUSTER_HC)) %>%
+  # 标准化数据
+  mutate(across(RADIO_PR:INTERNET_PR, scale)) %>%
+  pivot_longer(cols = RADIO_PR:INTERNET_PR,
+               names_to = "Variable",
+               values_to = "Value")
+
+# 创建变量顺序
+var_order <- c("RADIO_PR", "TV_PR", "LLPHONE_PR", 
+               "MOBILE_PR", "COMPUTER_PR", "INTERNET_PR")
+
+parallel_data$Variable <- factor(parallel_data$Variable, levels = var_order)
+
+# 绘制平行坐标图
+ggplot(parallel_data, aes(x = Variable, y = Value, 
+                          group = TS_PCODE, 
+                          color = CLUSTER_HC)) +
+  geom_line(alpha = 0.3) +
+  geom_point(alpha = 0.5, size = 0.8) +
+  scale_color_brewer(palette = "Set1", name = "Cluster") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        plot.title = element_text(size = 14, face = "bold")) +
+  labs(title = "Parallel Coordinates Plot - ICT Indicators by Cluster",
+       x = "ICT Indicators",
+       y = "Standardized Value") +
+  facet_wrap(~ CLUSTER_HC, ncol = 5)
+```
+
+## 9. Spatial Autocorrelation Test
+```{r}
+#| code-fold: false
+# Test spatial autocorrelation of clusters
+# Convert cluster to numeric for Moran's I test
+cluster_numeric <- as.numeric(shan_ict_clean$CLUSTER_HC)
+
+# Create spatial weights
+w <- nb2listw(nb_queen, style = "W", zero.policy = TRUE)
+
+# Moran's I test
+moran_test <- moran.test(cluster_numeric, w, zero.policy = TRUE)
+print(moran_test)
+
+# Interpretation
+if(moran_test$p.value < 0.05) {
+  cat("\nSignificant spatial autocorrelation detected (p <", 
+      round(moran_test$p.value, 4), ")\n")
+  cat("Moran's I:", round(moran_test$estimate[1], 4), "\n")
+  cat("This suggests spatial clustering of the clusters.\n")
+} else {
+  cat("\nNo significant spatial autocorrelation detected.\n")
+}
+```
+
+## 10. Save Results
+```{r}
+#| code-fold: false
+# Save the final dataset with all clustering results
+write_rds(shan_ict_clean, "data/rds/shan_ict_clustered.rds")
+
+# Create summary table
+summary_table <- data.frame(
+  Method = c("Hierarchical", "SKATER", "ClustGeo"),
+  Num_Clusters = c(5, 5, 5),
+  Spatial_Constraint = c("No", "Yes", "Partial"),
+  Alpha_Parameter = c(NA, NA, 0.3)
+)
+
+knitr::kable(summary_table, 
+             caption = "Summary of Clustering Methods")
+```
+
+## 11. Conclusions
+
+This analysis compared three clustering methods for identifying ICT development patterns in Shan State:
+
+1. **Hierarchical Clustering**: Pure attribute-based clustering without spatial constraints
+2. **SKATER**: Fully spatially constrained clustering using minimum spanning tree
+3. **ClustGeo**: Mixed approach balancing attribute similarity and spatial contiguity
+
+### Key Findings:
+
+- Hierarchical clustering may produce spatially fragmented clusters
+- SKATER ensures spatial contiguity but may sacrifice attribute homogeneity
+- ClustGeo provides a balance through the alpha parameter
+- ICT penetration shows clear spatial patterns across Shan State townships
+
+### Recommendations:
+
+- For policy implementation requiring geographic coherence, SKATER or ClustGeo are preferred
+- The optimal alpha value for ClustGeo should be chosen based on the specific application needs
+- Consider local infrastructure and accessibility when interpreting ICT development clusters

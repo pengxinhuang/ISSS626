@@ -26,6 +26,8 @@ website:
             href: Hands-on_Ex/Hands-on_ex05/ex05a.qmd
           - text: Ex05b · Local Spatial Autocorr
             href: Hands-on_Ex/Hands-on_ex05/ex05b.qmd
+          - text: Ex06 · [Your Exercise Title Here]
+            href: Hands-on_Ex/Hands-on_ex06/ex06.qmd
       - text: In-class
         href: In-class_Ex/index.qmd
       - text: Take-home
