@@ -20,6 +20,8 @@ website:
             href: Hands-on_Ex/Hands-on_ex02/ex02b.qmd
           - text: Ex03a · ST Point Patterns
             href: Hands-on_Ex/Hands-on_ex03/ex03.qmd
+          - text: Ex04 · Spatial Weights (Apps)
+            href: Hands-on_Ex/Hands-on_ex04/ex04.qmd
       - text: In-class
         href: In-class_Ex/index.qmd
       - text: Take-home
