@@ -1,0 +1,792 @@
+---
+title: "Hands-on Exercise 05b: Local Measures of Spatial Autocorrelation"
+author: "Your Name"
+date: "`r Sys.Date()`"
+format: 
+  html:
+    code-fold: true
+    code-summary: "Show code"
+    toc: true
+    toc-depth: 3
+    toc-float: true
+    number-sections: true
+    fig-width: 10
+    fig-height: 8
+execute:
+  freeze: true
+  warning: false
+  message: false
+  echo: true
+---
+
+# Overview
+
+Local Measures of Spatial Autocorrelation (LMSA) focus on the relationships between each observation and its surroundings, rather than providing a single summary of these relationships across the map. In this sense, they are not summary statistics but scores that allow us to learn more about the spatial structure in our data.
+
+In this hands-on exercise, you will learn how to compute Local Measures of Spatial Autocorrelation (LMSA) by using **sfdep** package. By the end of this hands-on exercise, you will be able to:
+
+- Import geospatial data using appropriate function(s) of **sf** package
+- Import csv file using appropriate function of **readr** package
+- Perform relational join using appropriate join function of **dplyr** package
+- Compute Local Indicator of Spatial Association (LISA) statistics for detecting clusters and outliers by using appropriate functions of **sfdep** package
+- Compute Getis-Ord's Gi-statistics for detecting hot spot or/and cold spot area by using appropriate functions of **sfdep** package
+- Visualise the analysis output by using **tmap** package
+
+## The Analytical Question
+
+In spatial policy, one of the main development objectives of the local government and planners is to ensure equal distribution of development in the province. Our task in this study, hence, is to apply appropriate spatial statistical methods to discover if development is evenly distributed geographically.
+
+If the answer is No, then our next question will be "is there sign of spatial clustering?". And, if the answer for this question is yes, then our next question will be "where are these clusters?"
+
+In this case study, we are interested to examine the spatial pattern of a selected development indicator (i.e. GDP per capita) of Hunan Province, People's Republic of China.
+
+## The Study Area and Data
+
+Two data sets will be used in this hands-on exercise:
+
+- **Hunan province administrative boundary layer at county level**: This is a geospatial data set in ESRI shapefile format
+- **Hunan_2012.csv**: This csv file contains selected Hunan's local development indicators in 2012
+
+# Getting Started
+
+## Setting the Analytical Tools
+
+Before we get started, we need to ensure that **sf**, **sfdep**, **tmap** and **tidyverse** packages are installed and loaded.
+
+- **sf** is used for importing and handling geospatial data in R
+- **tidyverse** is mainly used for wrangling attribute data in R
+- **sfdep** will be used to compute spatial weights, global and local spatial autocorrelation statistics
+- **tmap** will be used to prepare cartographic quality choropleth maps
+
+```{r}
+#| label: load-packages
+#| code-fold: false
+
+pacman::p_load(sf, sfdep, tmap, tidyverse, knitr)
+```
+
+# Getting the Data Into R Environment
+
+In this section, you will learn how to bring a geospatial data and its associated attribute table into R environment.
+
+## Import shapefile into R environment
+
+The code chunk below uses `st_read()` of **sf** package to import Hunan shapefile into R. The imported shapefile will be simple features object of sf.
+
+```{r}
+#| label: import-shapefile
+
+hunan <- st_read(dsn = "data/geospatial", 
+                 layer = "Hunan")
+```
+
+**Important**: The raw data is in WGS 84 geographic coordinates system. For geospatial analysis, it is appropriate to use projected coordinates system. We will transform Hunan geospatial data from WGS 84 to UTM zone 50N (i.e. EPSG: 32650).
+
+```{r}
+#| label: transform-crs
+
+hunan <- st_transform(hunan, crs = 32650)
+
+# Verify the transformation
+st_crs(hunan)
+```
+
+## Import csv file into R environment
+
+Next, we will import Hunan_2012.csv into R by using `read_csv()` of **readr** package.
+
+```{r}
+#| label: import-csv
+
+hunan2012 <- read_csv("data/aspatial/Hunan_2012.csv", show_col_types = FALSE)
+
+# Check the data structure
+glimpse(hunan2012)
+```
+
+## Performing relational join
+
+The code chunk below will be used to update the attribute table of hunan's sf data frame with the attribute fields of hunan2012 dataframe.
+
+```{r}
+#| label: join-data
+
+hunan <- left_join(hunan, hunan2012, by = c("County" = "County"))
+
+# Check the result
+glimpse(hunan)
+```
+
+## Visualising Regional Development Indicator
+
+In the code chunks below, tmap functions are used to build two choropleth maps by using equal interval and quantile classification methods.
+
+```{r}
+#| label: visualize-gdppc
+
+equal <- tm_shape(hunan) +
+  tm_fill("GDPPC",
+          n = 5,
+          style = "equal") +
+  tm_borders(alpha = 0.5) +
+  tm_layout(main.title = "Equal interval classification")
+
+quantile <- tm_shape(hunan) +
+  tm_fill("GDPPC",
+          n = 5,
+          style = "quantile") +
+  tm_borders(alpha = 0.5) +
+  tm_layout(main.title = "Quantile classification")
+
+tmap_arrange(equal, 
+             quantile, 
+             asp = 1, 
+             ncol = 2)
+```
+
+**Questions to consider:**
+- Does the plot above reveal any outliers or clusters?
+- Does the plot above indicate the presence of hot spots or cold spots?
+
+# Local Indicators of Spatial Association (LISA)
+
+Local Indicators of Spatial Association or LISA are statistics that evaluate the existence of clusters and/or outliers in the spatial arrangement of a given variable.
+
+In this section, you will learn how to apply appropriate Local Indicators for Spatial Association (LISA), especially local Moran's I to detect cluster and/or outlier from GDP per capita 2012 of Hunan Province, PRC.
+
+## Computing Contiguity Spatial Weights
+
+Before we can compute the local spatial autocorrelation statistics, we need to construct a spatial weights of the study area.
+
+In the code chunk below, `st_contiguity()` of **sfdep** package is used to compute contiguity weight matrices for the study area.
+
+```{r}
+#| label: compute-weights
+
+# Compute contiguity neighbours
+nb <- st_contiguity(hunan)
+
+# Calculate spatial weights (row-standardized)
+wt <- st_weights(nb, 
+                 style = "W")
+
+# Add to the sf data frame
+hunan <- hunan %>%
+  mutate(nb = nb,
+         wt = wt,
+         .before = 1)
+```
+
+To reveal the neighbour list, code chunk below is used:
+
+```{r}
+#| label: summary-weights
+
+summary(nb)
+```
+
+The summary report shows that:
+- There are **88 area units** in Hunan
+- The most connected area unit has **11 neighbours**
+- There are **two area units** with only **one neighbour**
+
+## Computing local Moran's I
+
+To compute local Moran's I, the `local_moran()` function of **sfdep** will be used.
+
+```{r}
+#| label: compute-local-moran
+
+lisa <- hunan %>%
+  mutate(local_moran = local_moran(GDPPC, nb, wt),
+         .before = 1) %>%
+  unnest(local_moran)
+
+# Check the structure
+glimpse(lisa)
+```
+
+The `local_moran()` function returns a data frame with the following columns:
+- **ii**: the local Moran's I statistics
+- **eii**: the expectation of local moran statistic under the randomisation hypothesis
+- **var_ii**: the variance of local moran statistic under the randomisation hypothesis
+- **z_ii**: the standard deviate of local moran statistic
+- **p_ii**: the p-value of local moran statistic
+- **mean**: classification based on mean
+- **median**: classification based on median
+- **pysal**: classification following PySAL convention
+
+## Visualising local Moran's I
+
+### Mapping local Moran's I values
+
+Using choropleth mapping functions of **tmap** package, we can plot the local Moran's I values.
+
+```{r}
+#| label: map-local-moran-values
+
+tm_shape(lisa) +
+  tm_fill("ii",
+          style = "pretty",
+          palette = "RdBu",
+          midpoint = NA) +
+  tm_borders(alpha = 0.5) +
+  tm_layout(main.title = "Local Moran's I of GDPPC",
+            main.title.size = 1.2,
+            main.title.fontface = "bold",
+            legend.height = 0.45,
+            legend.width = 0.35,
+            frame = TRUE) +
+  tm_compass(type = "8star", size = 2) +
+  tm_scale_bar() +
+  tm_grid(alpha = 0.2)
+```
+
+### Mapping local Moran's I p-values
+
+The choropleth shows there is evidence for both positive and negative Ii values. However, it is useful to consider the p-values for each of these values.
+
+```{r}
+#| label: map-local-moran-pvalues
+
+tm_shape(lisa) +
+  tm_fill("p_ii",
+          breaks = c(0, 0.001, 0.01, 0.05, 0.1, 1),
+          palette = "-Reds",
+          title = "p-value") +
+  tm_borders(alpha = 0.5) +
+  tm_layout(main.title = "p-values of Local Moran's I",
+            main.title.size = 1.2,
+            main.title.fontface = "bold",
+            legend.height = 0.45,
+            legend.width = 0.35,
+            frame = TRUE) +
+  tm_compass(type = "8star", size = 2) +
+  tm_scale_bar() +
+  tm_grid(alpha = 0.2)
+```
+
+### Mapping both local Moran's I values and p-values
+
+For effective interpretation, it is better to plot both the local Moran's I values map and its corresponding p-values map next to each other.
+
+```{r}
+#| label: map-both-moran
+
+ii_map <- tm_shape(lisa) +
+  tm_fill("ii",
+          style = "pretty",
+          n = 5,
+          palette = "RdBu") +
+  tm_borders(alpha = 0.5) +
+  tm_layout(main.title = "Local Moran's I of GDPPC",
+            legend.height = 0.45,
+            legend.width = 0.35,
+            frame = TRUE)
+
+p_ii_map <- tm_shape(lisa) +
+  tm_fill("p_ii",
+          breaks = c(0, 0.001, 0.01, 0.05, 0.1, 1),
+          palette = "-Reds") +
+  tm_borders(alpha = 0.5) +
+  tm_layout(main.title = "p-values of Local Moran's I",
+            legend.height = 0.45,
+            legend.width = 0.35,
+            frame = TRUE)
+
+tmap_arrange(ii_map, p_ii_map, asp = 1, ncol = 2)
+```
+
+## Preparing and Visualising LISA Map
+
+### Plotting Moran scatterplot
+
+A Moran Scatterplot is a graphical tool that visualizes the relationship between a variable's values and the average values of its neighboring locations (spatial lag).
+
+First, we need to calculate the spatial lag of GDPPC:
+
+```{r}
+#| label: compute-spatial-lag
+
+lisa <- lisa %>%
+  mutate(lag_GDPPC = st_lag(GDPPC, nb, wt),
+         .before = 1)
+```
+
+Now, plot the Moran Scatterplot:
+
+```{r}
+#| label: moran-scatterplot-basic
+
+ggplot(data = lisa,
+       aes(x = GDPPC,
+           y = lag_GDPPC)) +
+  geom_point() +
+  geom_smooth(method = "lm",
+              se = FALSE,
+              color = "red") +
+  labs(x = "GDPPC",
+       y = "Spatial Lag of GDPPC",
+       title = "Moran Scatterplot") +
+  theme_minimal()
+```
+
+To make the plot more intuitive, we can color-code by LISA quadrants:
+
+```{r}
+#| label: moran-scatterplot-colored
+
+ggplot(data = lisa,
+       aes(x = GDPPC,
+           y = lag_GDPPC,
+           color = mean)) +
+  geom_point(size = 2) +
+  geom_smooth(method = "lm",
+              se = FALSE,
+              color = "black") +
+  geom_hline(yintercept = mean(lisa$lag_GDPPC), lty = 2) +
+  geom_vline(xintercept = mean(lisa$GDPPC), lty = 2) +
+  scale_color_manual(
+    values = c("High-High" = "red",
+               "Low-Low" = "blue",
+               "Low-High" = "lightblue",
+               "High-Low" = "pink")) +
+  labs(x = "GDPPC",
+       y = "Spatial Lag of GDPPC",
+       title = "Moran Scatterplot with LISA Quadrants") +
+  theme_minimal()
+```
+
+### Plotting Moran scatterplot with standardised variable
+
+First we will use `scale()` to center and scale the variable:
+
+```{r}
+#| label: standardize-variables
+
+lisa <- lisa %>%
+  mutate(z_GDPPC = as.vector(scale(GDPPC)),
+         z_lag_GDPPC = as.vector(scale(lag_GDPPC)),
+         .before = 1)
+```
+
+Now, plot the standardised Moran scatterplot:
+
+```{r}
+#| label: moran-scatterplot-standardized
+
+ggplot(data = lisa,
+       aes(x = z_GDPPC,
+           y = z_lag_GDPPC,
+           color = mean)) +
+  geom_point(size = 2) +
+  geom_smooth(method = "lm",
+              se = FALSE,
+              color = "black") +
+  geom_hline(yintercept = 0, lty = 2) +
+  geom_vline(xintercept = 0, lty = 2) +
+  scale_color_manual(
+    values = c("High-High" = "red",
+               "Low-Low" = "blue",
+               "Low-High" = "lightblue",
+               "High-Low" = "pink")) +
+  labs(x = "Standardised GDPPC",
+       y = "Standardised Spatial Lag of GDPPC",
+       title = "Standardised Moran Scatterplot with LISA Quadrants") +
+  theme_minimal()
+```
+
+### Preparing LISA cluster map
+
+Now we will prepare a LISA cluster map. First, we need to create a categorical variable for LISA clusters:
+
+```{r}
+#| label: prepare-lisa-clusters
+
+lisa <- lisa %>%
+  mutate(LISA_cluster = case_when(
+    p_ii > 0.05 ~ "Insignificant",
+    mean == "High-High" ~ "High-High",
+    mean == "Low-Low" ~ "Low-Low",
+    mean == "Low-High" ~ "Low-High",
+    mean == "High-Low" ~ "High-Low",
+    TRUE ~ "Other"
+  ),
+  LISA_cluster = factor(
+    LISA_cluster,
+    levels = c("Insignificant", "High-High", "Low-Low", 
+               "Low-High", "High-Low")
+  ))
+
+# Check the distribution
+table(lisa$LISA_cluster)
+```
+
+### Plotting LISA map
+
+Now, we can plot the LISA map:
+
+```{r}
+#| label: plot-lisa-map
+
+lisa_map <- tm_shape(lisa) +
+  tm_polygons(
+    "LISA_cluster",
+    palette = c("grey80",     # Insignificant
+                "red",        # High-High
+                "blue",       # Low-Low
+                "lightblue",  # Low-High
+                "pink"),      # High-Low
+    title = "LISA Cluster") +
+  tm_borders(alpha = 0.5) +
+  tm_layout(main.title = "LISA Cluster Map (p < 0.05)",
+            main.title.size = 1.2,
+            main.title.fontface = "bold",
+            legend.height = 0.45,
+            legend.width = 0.35,
+            frame = TRUE) +
+  tm_compass(type = "8star", size = 2) +
+  tm_scale_bar() +
+  tm_grid(alpha = 0.2)
+
+lisa_map
+```
+
+For comprehensive visualization, we can combine all LISA-related maps:
+
+```{r}
+#| label: combined-lisa-maps
+#| fig-height: 12
+
+tmap_arrange(ii_map, p_ii_map, lisa_map, asp = 1, ncol = 2)
+```
+
+### Statistical Observations from LISA Map
+
+The LISA map reveals:
+- **High-High clusters (Hot spots)**: Areas of high GDPPC surrounded by high GDPPC neighbors
+- **Low-Low clusters (Cold spots)**: Areas of low GDPPC surrounded by low GDPPC neighbors
+- **Low-High outliers**: Low GDPPC areas surrounded by high GDPPC neighbors
+- **High-Low outliers**: High GDPPC areas surrounded by low GDPPC neighbors
+- **Insignificant areas**: No significant local spatial autocorrelation
+
+# Hot Spots and Cold Spots Analysis (HCSA)
+
+Hot spots and cold spots analysis is a technique used in spatial statistics to identify statistically significant clusters of high values (hot spots) and low values (cold spots).
+
+HCSA uses the Getis-Ord Gi* statistic to determine if the observed clustering is statistically significant.
+
+## Deriving distance weight matrix
+
+For Getis-Ord Gi* statistics, we define neighbours based on distance.
+
+### Determine the cut-off distance
+
+First, we need to determine the upper limit for distance band:
+
+```{r}
+#| label: determine-cutoff
+
+# Get geometry
+geo <- st_geometry(hunan)
+
+# Compute centroid
+co <- st_centroid(geo)
+
+# Determine the cutoff distance
+k1 <- sfdep::st_knn(co, k = 1)
+k1_dist <- sfdep::st_nb_dists(co, k1)
+
+# Summary of distances
+summary(unlist(k1_dist))
+```
+
+The summary report shows that the largest first nearest neighbour distance is about 61.8 km, so using this as the upper threshold gives certainty that all units will have at least one neighbour.
+
+### Computing fixed distance weights
+
+Using the critical threshold value computed above, we compute the fixed distance weight:
+
+```{r}
+#| label: fixed-distance-weights
+
+# Compute fixed distance neighbors (using 62km as threshold)
+wm_fd <- st_dist_band(co, 
+                      upper = 62000)  # Note: using meters since we're in UTM
+
+# Important: Include self for Gi* statistics
+wm_fd <- include_self(wm_fd)
+
+# Compute weights
+wm_fd_weights <- st_weights(wm_fd)
+
+# Check summary
+summary(wm_fd)
+```
+
+### Computing adaptive distance weights
+
+It is possible to control the numbers of neighbours directly using k-nearest neighbours:
+
+```{r}
+#| label: adaptive-distance-weights
+
+# Compute k-nearest neighbors (k=8)
+wm_ad <- st_knn(co, k = 8)
+
+# Include self for Gi* statistics
+wm_ad <- include_self(wm_ad)
+
+# Compute weights
+wm_ad_weights <- st_weights(wm_ad)
+
+# Check summary
+summary(wm_ad)
+```
+
+## Computing local Gi* statistics
+
+### Using fixed distance weights
+
+```{r}
+#| label: compute-gi-fixed
+
+HCSA_fdw <- hunan %>%
+  mutate(local_Gi = local_gstar_perm(GDPPC, 
+                                     wm_fd, 
+                                     wm_fd_weights,
+                                     nsim = 999),
+         .before = 1) %>%
+  unnest(local_Gi)
+
+# Check the results
+glimpse(HCSA_fdw)
+```
+
+### Using adaptive distance weights
+
+```{r}
+#| label: compute-gi-adaptive
+
+HCSA_adw <- hunan %>%
+  mutate(local_Gi = local_gstar_perm(GDPPC, 
+                                     wm_ad, 
+                                     wm_ad_weights,
+                                     nsim = 999),
+         .before = 1) %>%
+  unnest(local_Gi)
+
+# Check the results
+glimpse(HCSA_adw)
+```
+
+## Visualising HCSA
+
+### Mapping Gi* with fixed distance weights
+
+```{r}
+#| label: map-gi-fixed
+
+tm_shape(HCSA_fdw) +
+  tm_fill("gi_star",
+          style = "pretty",
+          palette = "-RdBu",
+          midpoint = NA) +
+  tm_borders(alpha = 0.5) +
+  tm_layout(main.title = "Local Gi* of GDPPC (Fixed Distance)",
+            main.title.size = 1.2,
+            main.title.fontface = "bold",
+            legend.height = 0.45,
+            legend.width = 0.35,
+            frame = TRUE) +
+  tm_compass(type = "8star", size = 2) +
+  tm_scale_bar() +
+  tm_grid(alpha = 0.2)
+```
+
+### Mapping local Gi* p-values
+
+```{r}
+#| label: map-gi-pvalues
+
+tm_shape(HCSA_fdw) +
+  tm_fill("p_sim",
+          breaks = c(0, 0.001, 0.01, 0.05, 0.1, 1),
+          palette = "-Reds",
+          title = "p-value") +
+  tm_borders(alpha = 0.5) +
+  tm_layout(main.title = "p-values of Local Gi* (Fixed Distance)",
+            main.title.size = 1.2,
+            main.title.fontface = "bold",
+            legend.height = 0.45,
+            legend.width = 0.35,
+            frame = TRUE) +
+  tm_compass(type = "8star", size = 2) +
+  tm_scale_bar() +
+  tm_grid(alpha = 0.2)
+```
+
+### Mapping both Gi* values and p-values
+
+```{r}
+#| label: map-both-gi
+
+Gi_star_map <- tm_shape(HCSA_fdw) +
+  tm_fill("gi_star",
+          style = "pretty",
+          n = 5,
+          palette = "-RdBu") +
+  tm_borders(alpha = 0.5) +
+  tm_layout(main.title = "Local Gi*",
+            legend.height = 0.45,
+            legend.width = 0.35,
+            frame = TRUE)
+
+p_values_map <- tm_shape(HCSA_fdw) +
+  tm_fill("p_sim",
+          breaks = c(0, 0.001, 0.01, 0.05, 0.1, 1),
+          palette = "-Reds") +
+  tm_borders(alpha = 0.5) +
+  tm_layout(main.title = "p-values",
+            legend.height = 0.45,
+            legend.width = 0.35,
+            frame = TRUE)
+
+tmap_arrange(Gi_star_map, p_values_map, asp = 1, ncol = 2)
+```
+
+### Preparing and plotting HCSA Map
+
+Create a categorical variable for HCSA clusters:
+
+```{r}
+#| label: prepare-hcsa-clusters
+
+HCSA_fdw <- HCSA_fdw %>%
+  mutate(HCSA_cluster = case_when(
+    p_sim > 0.05 ~ "Insignificant",
+    p_sim <= 0.05 & gi_star > 0 ~ "Hot spot",
+    p_sim <= 0.05 & gi_star < 0 ~ "Cold spot",
+    TRUE ~ "Other"
+  ),
+  HCSA_cluster = factor(
+    HCSA_cluster,
+    levels = c("Insignificant", "Hot spot", "Cold spot")
+  ))
+
+# Check the distribution
+table(HCSA_fdw$HCSA_cluster)
+```
+
+Now plot the HCSA map:
+
+```{r}
+#| label: plot-hcsa-map
+
+HCSA_map <- tm_shape(HCSA_fdw) +
+  tm_polygons(
+    "HCSA_cluster",
+    palette = c("grey80",    # Insignificant
+                "red",       # Hot spot
+                "blue"),     # Cold spot
+    title = "HCSA Cluster") +
+  tm_borders(alpha = 0.5) +
+  tm_layout(main.title = "HCSA Clusters (p < 0.05)",
+            main.title.size = 1.2,
+            main.title.fontface = "bold",
+            legend.height = 0.45,
+            legend.width = 0.35,
+            frame = TRUE) +
+  tm_compass(type = "8star", size = 2) +
+  tm_scale_bar() +
+  tm_grid(alpha = 0.2)
+
+HCSA_map
+```
+
+### Combined visualization
+
+```{r}
+#| label: combined-hcsa-maps
+
+tmap_arrange(Gi_star_map, HCSA_map, asp = 1, ncol = 2)
+```
+
+## Comparison: Fixed vs Adaptive Distance Weights
+
+Let's compare the results from fixed and adaptive distance weights:
+
+```{r}
+#| label: prepare-hcsa-adaptive
+
+# Prepare HCSA clusters for adaptive weights
+HCSA_adw <- HCSA_adw %>%
+  mutate(HCSA_cluster = case_when(
+    p_sim > 0.05 ~ "Insignificant",
+    p_sim <= 0.05 & gi_star > 0 ~ "Hot spot",
+    p_sim <= 0.05 & gi_star < 0 ~ "Cold spot",
+    TRUE ~ "Other"
+  ),
+  HCSA_cluster = factor(
+    HCSA_cluster,
+    levels = c("Insignificant", "Hot spot", "Cold spot")
+  ))
+```
+
+```{r}
+#| label: compare-hcsa
+#| fig-height: 8
+
+HCSA_fixed <- tm_shape(HCSA_fdw) +
+  tm_polygons("HCSA_cluster",
+              palette = c("grey80", "red", "blue"),
+              title = "HCSA") +
+  tm_borders(alpha = 0.5) +
+  tm_layout(main.title = "Fixed Distance (62km)",
+            legend.height = 0.45,
+            legend.width = 0.35,
+            frame = TRUE)
+
+HCSA_adaptive <- tm_shape(HCSA_adw) +
+  tm_polygons("HCSA_cluster",
+              palette = c("grey80", "red", "blue"),
+              title = "HCSA") +
+  tm_borders(alpha = 0.5) +
+  tm_layout(main.title = "Adaptive Distance (k=8)",
+            legend.height = 0.45,
+            legend.width = 0.35,
+            frame = TRUE)
+
+tmap_arrange(HCSA_fixed, HCSA_adaptive, asp = 1, ncol = 2)
+```
+
+# Summary
+
+In this hands-on exercise, we have:
+
+## LISA Analysis Results
+1. **Identified local clusters and outliers** using Local Moran's I:
+   - High-High clusters: Counties with high GDPPC surrounded by high GDPPC neighbors
+   - Low-Low clusters: Counties with low GDPPC surrounded by low GDPPC neighbors
+   - Spatial outliers: High-Low and Low-High patterns
+
+2. **Visualized spatial relationships** through:
+   - Moran scatterplots showing the relationship between values and their spatial lags
+   - LISA cluster maps highlighting significant local patterns
+
+## HCSA Analysis Results
+3. **Detected hot spots and cold spots** using Getis-Ord Gi* statistics:
+   - Hot spots: Significant clusters of high GDPPC values
+   - Cold spots: Significant clusters of low GDPPC values
+
+4. **Compared different spatial weight schemes**:
+   - Fixed distance weights (62km threshold)
+   - Adaptive distance weights (k=8 nearest neighbors)
+
+## Key Findings
+- Economic development in Hunan Province shows clear **spatial clustering**
+- **Hot spots** (high GDPPC clusters) are concentrated in specific regions
+- **Cold spots** (low GDPPC clusters) indicate areas needing development attention
+- The choice of spatial weights (fixed vs adaptive) can influence the detection of clusters
+
+These local measures complement the global measures from Exercise 05a by showing **where** the spatial clustering occurs, providing actionable insights for policy makers and planners.
