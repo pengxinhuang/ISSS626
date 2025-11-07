@@ -23,9 +23,9 @@ website:
           - text: Ex04 · Spatial Weights (Apps)
             href: Hands-on_Ex/Hands-on_ex04/ex04.qmd
           - text: Ex05a · Global Spatial Autocorr
-            href: Hands-on_Ex/Hands-on_ex05a/ex05a.qmd
+            href: Hands-on_Ex/Hands-on_ex05/ex05a.qmd
           - text: Ex05b · Local Spatial Autocorr
-            href: Hands-on_Ex/Hands-on_ex05b/ex05b.qmd
+            href: Hands-on_Ex/Hands-on_ex05/ex05b.qmd
       - text: In-class
         href: In-class_Ex/index.qmd
       - text: Take-home
