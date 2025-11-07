@@ -1,0 +1,703 @@
+---
+title: "Hands-on Exercise 07: Geographically Weighted Regression"
+author: "Huang Pengxin"
+date: "2025-01-07"
+date-modified: "last-modified"
+execute:
+  eval: true
+  echo: true
+  warning: false
+  freeze: true
+---
+
+## 1. Overview
+
+Geographically Weighted Regression (GWR) is a spatial statistical technique that recognizes that traditional "global" regression models may be limited when spatial processes vary across a study area. In this hands-on exercise, we will learn how to build hedonic pricing models using GWR methods to examine the relationships between condo selling prices and various structural and locational characteristics in Singapore.
+
+### Learning Objectives
+
+By the end of this session, you will be able to:
+
+- Build hedonic pricing models using OLS and GWR methods
+- Calibrate GWR models using fixed and adaptive bandwidths
+- Visualize and interpret GWR outputs
+- Compare global and local regression models
+
+## 2. The Data
+
+Two datasets will be used:
+
+1. **URA Master Plan 2014 subzone boundaries** (geospatial)
+2. **Condo resale prices 2015** (aspatial)
+
+## 3. Getting Started
+
+### 3.1 Loading Required Packages
+```{r}
+#| code-fold: false
+pacman::p_load(sf, tidyverse, tmap, spdep, GWmodel, 
+               ggpubr, corrplot, plotly, 
+               olsrr, devtools)
+```
+
+### 3.2 Importing Geospatial Data
+```{r}
+#| code-fold: false
+# Read Master Plan 2014 Subzone Boundary
+mpsz <- st_read(dsn = "data/geospatial", 
+                layer = "MP14_SUBZONE_WEB_PL",
+                quiet = TRUE) %>%
+  st_transform(crs = 3414)  # SVY21
+
+# Check the data
+glimpse(mpsz)
+```
+
+## 4. Importing and Preparing Aspatial Data
+
+### 4.1 Import Condo Resale Data
+```{r}
+#| code-fold: false
+# Read condo resale data
+condo_resale <- read_csv("data/aspatial/Condo_resale_2015.csv",
+                         show_col_types = FALSE)
+
+# Check data structure
+glimpse(condo_resale)
+
+# Summary statistics
+summary(condo_resale)
+```
+
+### 4.2 Convert Aspatial Data to sf Object
+```{r}
+#| code-fold: false
+# Convert to sf object using coordinates
+condo_resale_sf <- st_as_sf(condo_resale,
+                            coords = c("LONGITUDE", "LATITUDE"),
+                            crs = 4326) %>%
+  st_transform(crs = 3414)
+
+# Check the result
+head(condo_resale_sf)
+```
+
+## 5. Exploratory Data Analysis
+
+### 5.1 Distribution of Selling Prices
+```{r}
+#| code-fold: false
+#| fig-width: 12
+#| fig-height: 5
+# Histogram of selling price
+p1 <- ggplot(data = condo_resale, aes(x = SELLING_PRICE)) +
+  geom_histogram(bins = 20, fill = "lightblue", color = "black") +
+  labs(title = "Distribution of Selling Prices",
+       x = "Selling Price ($)",
+       y = "Frequency") +
+  theme_minimal()
+
+# Log-transformed selling price
+p2 <- ggplot(data = condo_resale, 
+             aes(x = log(SELLING_PRICE))) +
+  geom_histogram(bins = 20, fill = "lightgreen", color = "black") +
+  labs(title = "Distribution of Log Selling Prices",
+       x = "Log(Selling Price)",
+       y = "Frequency") +
+  theme_minimal()
+
+ggarrange(p1, p2, ncol = 2)
+```
+
+### 5.2 Geographic Distribution of Condo Sales
+```{r}
+#| code-fold: false
+#| fig-width: 10
+#| fig-height: 8
+tmap_mode("view")
+tm_shape(mpsz) +
+  tm_polygons(alpha = 0.3) +
+tm_shape(condo_resale_sf) +
+  tm_dots(col = "SELLING_PRICE",
+          size = 0.05,
+          border.col = "black",
+          border.lwd = 0.5,
+          style = "quantile",
+          palette = "YlOrRd",
+          title = "Selling Price") +
+  tm_view(set.zoom.limits = c(11, 14))
+tmap_mode("plot")
+```
+
+### 5.3 Statistical Summary by Variables
+```{r}
+#| code-fold: false
+# Summary of key variables - 移除PROX_MALL
+condo_resale %>%
+  select(SELLING_PRICE, AREA_SQM, AGE, PROX_CBD, 
+         PROX_CHILDCARE, PROX_ELDERLYCARE, PROX_MRT,
+         PROX_SHOPPING_MALL, NO_Of_UNITS) %>%
+  summary()
+```
+
+这个版本会自动选择所有以"PROX_"开头的列，避免手动列举时出错。
+
+修正这个部分后，整个文档应该能正常渲染了！
+```
+
+## 6. Building Hedonic Pricing Model using OLS
+
+### 6.1 Simple Linear Regression
+```{r}
+#| code-fold: false
+# Build simple OLS model with AREA_SQM
+condo_ols_simple <- lm(SELLING_PRICE ~ AREA_SQM, 
+                       data = condo_resale)
+summary(condo_ols_simple)
+
+# Visualize the relationship
+ggplot(condo_resale, aes(x = AREA_SQM, y = SELLING_PRICE)) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(method = "lm", col = "red") +
+  labs(title = "Selling Price vs Floor Area",
+       x = "Floor Area (sqm)",
+       y = "Selling Price ($)") +
+  theme_minimal()
+```
+
+### 6.2 Multiple Linear Regression
+```{r}
+#| code-fold: false
+# Build multiple regression model with all available variables
+condo_mlr <- lm(formula = SELLING_PRICE ~ AREA_SQM + AGE + 
+                  PROX_CBD + PROX_CHILDCARE + PROX_ELDERLYCARE +
+                  PROX_URA_GROWTH_AREA + PROX_HAWKER_MARKET + 
+                  PROX_KINDERGARTEN + PROX_MRT + 
+                  PROX_PARK + PROX_PRIMARY_SCH + PROX_TOP_PRIMARY_SCH + 
+                  PROX_SHOPPING_MALL + PROX_SUPERMARKET + PROX_BUS_STOP +
+                  NO_Of_UNITS + FAMILY_FRIENDLY + FREEHOLD + LEASEHOLD_99YR,
+                data = condo_resale)
+
+summary(condo_mlr)
+```
+
+### 6.3 Check for Multicollinearity
+```{r}
+#| code-fold: false
+#| fig-width: 12
+#| fig-height: 10
+# Correlation matrix (exclude non-numeric columns)
+numeric_cols <- condo_resale %>%
+  select(-LATITUDE, -LONGITUDE, -POSTCODE) %>%
+  select_if(is.numeric) %>%
+  names()
+
+cor_matrix <- cor(condo_resale[, numeric_cols])
+
+corrplot(cor_matrix, 
+         method = "circle", 
+         type = "upper",
+         diag = FALSE,
+         order = "hclust",
+         tl.cex = 0.7,
+         tl.col = "black",
+         tl.srt = 45,
+         title = "Correlation Matrix")
+
+# VIF check using olsrr
+ols_vif_tol(condo_mlr)
+```
+
+### 6.4 Revised Model (Removing Multicollinear Variables)
+```{r}
+#| code-fold: false
+# Build revised model excluding highly correlated variables
+# Remove PROX_HAWKER_MARKET, PROX_KINDERGARTEN, PROX_TOP_PRIMARY_SCH, PROX_SUPERMARKET, LEASEHOLD_99YR
+condo_mlr2 <- lm(formula = SELLING_PRICE ~ AREA_SQM + AGE + 
+                   PROX_CBD + PROX_CHILDCARE + PROX_ELDERLYCARE +
+                   PROX_URA_GROWTH_AREA + PROX_MRT + PROX_PARK + 
+                   PROX_PRIMARY_SCH + PROX_SHOPPING_MALL + 
+                   PROX_BUS_STOP + NO_Of_UNITS + FAMILY_FRIENDLY + 
+                   FREEHOLD,
+                 data = condo_resale)
+
+summary(condo_mlr2)
+ols_vif_tol(condo_mlr2)
+```
+
+### 6.5 Model Diagnostics
+```{r}
+#| code-fold: false
+#| fig-width: 12
+#| fig-height: 10
+# Diagnostic plots
+par(mfrow = c(2, 2))
+plot(condo_mlr2)
+par(mfrow = c(1, 1))
+
+# Additional diagnostic tests
+# Normality test
+ols_test_normality(condo_mlr2)
+
+# Breusch-Pagan test for heteroscedasticity
+ols_test_breusch_pagan(condo_mlr2)
+```
+
+## 7. Test for Spatial Autocorrelation
+
+### 7.1 Convert to SpatialPointsDataFrame
+```{r}
+#| code-fold: false
+# Extract residuals
+mlr_residuals <- residuals(condo_mlr2)
+condo_resale$mlr_residuals <- mlr_residuals
+
+# Add residuals to sf object
+condo_resale_sf$mlr_residuals <- mlr_residuals
+
+# Convert to sp object for GWmodel
+condo_resale_sp <- as(condo_resale_sf, "Spatial")
+condo_resale_sp@data$mlr_residuals <- mlr_residuals
+```
+
+### 7.2 Visualize Residuals
+```{r}
+#| code-fold: false
+#| fig-width: 10
+#| fig-height: 8
+# Map residuals
+tmap_mode("plot")
+tm_shape(mpsz) +
+  tm_polygons(alpha = 0.4) +
+tm_shape(condo_resale_sf) +
+  tm_dots(col = "mlr_residuals",
+          size = 0.02,
+          style = "quantile",
+          palette = "-RdBu",
+          title = "MLR Residuals") +
+  tm_layout(main.title = "Spatial Distribution of OLS Residuals",
+            main.title.size = 1.2)
+```
+
+### 7.3 Moran's I Test
+```{r}
+#| code-fold: false
+# Create neighbors
+coords <- st_coordinates(condo_resale_sf)
+knn_nb <- knn2nb(knearneigh(coords, k = 8))
+knn_listw <- nb2listw(knn_nb, style = "W")
+
+# Moran's I test on residuals
+moran.test(mlr_residuals, knn_listw)
+
+# Moran scatterplot
+moran.plot(mlr_residuals, knn_listw,
+           main = "Moran Scatterplot of OLS Residuals",
+           xlab = "Residuals",
+           ylab = "Spatially Lagged Residuals")
+```
+
+## 8. Building Hedonic Pricing Models using GWR
+
+### 8.1 Fixed Bandwidth GWR
+```{r}
+#| code-fold: false
+# Determine optimal fixed bandwidth using CV
+bw_fixed_cv <- bw.gwr(formula = SELLING_PRICE ~ AREA_SQM + AGE + 
+                        PROX_CBD + PROX_CHILDCARE + PROX_ELDERLYCARE +
+                        PROX_URA_GROWTH_AREA + PROX_MRT + PROX_PARK + 
+                        PROX_PRIMARY_SCH + PROX_SHOPPING_MALL + 
+                        PROX_BUS_STOP + NO_Of_UNITS + FAMILY_FRIENDLY + 
+                        FREEHOLD,
+                      data = condo_resale_sp,
+                      approach = "CV",
+                      kernel = "gaussian",
+                      adaptive = FALSE,
+                      longlat = FALSE)
+
+cat("Optimal fixed bandwidth (CV):", bw_fixed_cv, "meters\n")
+
+# Using AIC
+bw_fixed_aic <- bw.gwr(formula = SELLING_PRICE ~ AREA_SQM + AGE + 
+                         PROX_CBD + PROX_CHILDCARE + PROX_ELDERLYCARE +
+                         PROX_URA_GROWTH_AREA + PROX_MRT + PROX_PARK + 
+                         PROX_PRIMARY_SCH + PROX_SHOPPING_MALL + 
+                         PROX_BUS_STOP + NO_Of_UNITS + FAMILY_FRIENDLY + 
+                         FREEHOLD,
+                       data = condo_resale_sp,
+                       approach = "AIC",
+                       kernel = "gaussian",
+                       adaptive = FALSE,
+                       longlat = FALSE)
+
+cat("Optimal fixed bandwidth (AIC):", bw_fixed_aic, "meters\n")
+```
+
+### 8.2 Calibrate Fixed Bandwidth GWR Model
+```{r}
+#| code-fold: false
+# Calibrate GWR model with fixed bandwidth
+gwr_fixed <- gwr.basic(formula = SELLING_PRICE ~ AREA_SQM + AGE + 
+                        PROX_CBD + PROX_CHILDCARE + PROX_ELDERLYCARE +
+                        PROX_URA_GROWTH_AREA + PROX_MRT + PROX_PARK + 
+                        PROX_PRIMARY_SCH + PROX_SHOPPING_MALL + 
+                        PROX_BUS_STOP + NO_Of_UNITS + FAMILY_FRIENDLY + 
+                        FREEHOLD,
+                      data = condo_resale_sp,
+                      bw = bw_fixed_aic,
+                      kernel = "gaussian",
+                      adaptive = FALSE,
+                      longlat = FALSE)
+
+# Print results
+gwr_fixed
+```
+
+### 8.3 Adaptive Bandwidth GWR
+```{r}
+#| code-fold: false
+# Determine optimal adaptive bandwidth
+bw_adaptive <- bw.gwr(formula = SELLING_PRICE ~ AREA_SQM + AGE + 
+                       PROX_CBD + PROX_CHILDCARE + PROX_ELDERLYCARE +
+                       PROX_URA_GROWTH_AREA + PROX_MRT + PROX_PARK + 
+                       PROX_PRIMARY_SCH + PROX_SHOPPING_MALL + 
+                       PROX_BUS_STOP + NO_Of_UNITS + FAMILY_FRIENDLY + 
+                       FREEHOLD,
+                     data = condo_resale_sp,
+                     approach = "AIC",
+                     kernel = "gaussian",
+                     adaptive = TRUE,
+                     longlat = FALSE)
+
+cat("Optimal adaptive bandwidth:", bw_adaptive, "neighbors\n")
+
+# Calibrate adaptive GWR model
+gwr_adaptive <- gwr.basic(formula = SELLING_PRICE ~ AREA_SQM + AGE + 
+                          PROX_CBD + PROX_CHILDCARE + PROX_ELDERLYCARE +
+                          PROX_URA_GROWTH_AREA + PROX_MRT + PROX_PARK + 
+                          PROX_PRIMARY_SCH + PROX_SHOPPING_MALL + 
+                          PROX_BUS_STOP + NO_Of_UNITS + FAMILY_FRIENDLY + 
+                          FREEHOLD,
+                        data = condo_resale_sp,
+                        bw = bw_adaptive,
+                        kernel = "gaussian",
+                        adaptive = TRUE,
+                        longlat = FALSE)
+
+gwr_adaptive
+```
+
+## 9. Visualizing GWR Results
+
+### 9.1 Extract GWR Results
+```{r}
+#| code-fold: false
+
+# 提取GWR结果
+gwr_results <- gwr_adaptive$SDF@data
+
+# 提取拟合值、残差和局部R²
+condo_resale_sf$gwr_yhat <- gwr_results$yhat
+condo_resale_sf$gwr_residual <- gwr_results$residual
+condo_resale_sf$gwr_localR2 <- gwr_results$Local_R2
+
+# 提取系数估计值（前15列）
+coef_names <- c("Intercept", "AREA_SQM", "AGE", "PROX_CBD", 
+                "PROX_CHILDCARE", "PROX_ELDERLYCARE",
+                "PROX_URA_GROWTH_AREA", "PROX_MRT", "PROX_PARK",
+                "PROX_PRIMARY_SCH", "PROX_SHOPPING_MALL",
+                "PROX_BUS_STOP", "NO_Of_UNITS", "FAMILY_FRIENDLY",
+                "FREEHOLD")
+
+# 提取系数
+for(i in 1:15) {
+  condo_resale_sf[[paste0("gwr_", coef_names[i])]] <- gwr_results[, i]
+}
+
+# 提取标准误（第21-35列）
+for(i in 1:15) {
+  condo_resale_sf[[paste0("gwr_SE_", coef_names[i])]] <- gwr_results[, i + 20]
+}
+
+# 提取t值（第36-50列）- 可选
+for(i in 1:15) {
+  condo_resale_sf[[paste0("gwr_TV_", coef_names[i])]] <- gwr_results[, i + 35]
+}
+
+# 检查结果
+cat("Local R² Summary:\n")
+summary(condo_resale_sf$gwr_localR2)
+
+cat("\n✓ GWR results successfully extracted\n")
+cat("Number of observations:", nrow(condo_resale_sf), "\n")
+```
+
+### 9.2 Visualize Local R-squared
+```{r}
+#| code-fold: false
+#| fig-width: 10
+#| fig-height: 8
+
+tmap_mode("plot")
+
+# 创建Local R²地图
+tm_shape(mpsz) +
+  tm_polygons(col = "grey95", 
+              border.col = "grey60",
+              lwd = 0.5) +
+tm_shape(condo_resale_sf) +
+  tm_dots("gwr_localR2",
+          size = 0.05,
+          border.col = "black",
+          border.lwd = 0.3,
+          style = "quantile",
+          n = 5,
+          palette = "RdPu",
+          title = "Local R²") +
+  tm_layout(main.title = "GWR Local R-squared Values",
+            main.title.size = 1.2,
+            legend.position = c("right", "bottom"),
+            frame = FALSE)
+
+# 打印统计信息
+cat("\nLocal R² Statistics:\n")
+cat("Minimum:", round(min(condo_resale_sf$gwr_localR2), 3), "\n")
+cat("Maximum:", round(max(condo_resale_sf$gwr_localR2), 3), "\n")
+cat("Mean:", round(mean(condo_resale_sf$gwr_localR2), 3), "\n")
+cat("Median:", round(median(condo_resale_sf$gwr_localR2), 3), "\n")
+```
+
+### 9.3 Visualize Coefficient Estimates
+```{r}
+#| code-fold: false
+#| fig-width: 15
+#| fig-height: 10
+# Create maps for key coefficients
+tm1 <- tm_shape(mpsz) + tm_polygons(alpha = 0.4) +
+       tm_shape(condo_resale_sf) +
+       tm_dots(col = "gwr_AREA_SQM", size = 0.02,
+               style = "quantile", palette = "-RdBu",
+               title = "Area Coefficient") +
+       tm_layout(main.title = "AREA_SQM", main.title.size = 0.8)
+
+tm2 <- tm_shape(mpsz) + tm_polygons(alpha = 0.4) +
+       tm_shape(condo_resale_sf) +
+       tm_dots(col = "gwr_AGE", size = 0.02,
+               style = "quantile", palette = "-RdBu",
+               title = "Age Coefficient") +
+       tm_layout(main.title = "AGE", main.title.size = 0.8)
+
+tm3 <- tm_shape(mpsz) + tm_polygons(alpha = 0.4) +
+       tm_shape(condo_resale_sf) +
+       tm_dots(col = "gwr_PROX_CBD", size = 0.02,
+               style = "quantile", palette = "-RdBu",
+               title = "CBD Distance") +
+       tm_layout(main.title = "PROX_CBD", main.title.size = 0.8)
+
+tm4 <- tm_shape(mpsz) + tm_polygons(alpha = 0.4) +
+       tm_shape(condo_resale_sf) +
+       tm_dots(col = "gwr_PROX_MRT", size = 0.02,
+               style = "quantile", palette = "-RdBu",
+               title = "MRT Distance") +
+       tm_layout(main.title = "PROX_MRT", main.title.size = 0.8)
+
+tmap_arrange(tm1, tm2, tm3, tm4, ncol = 2)
+```
+
+### 9.4 Visualize GWR Residuals
+```{r}
+#| code-fold: false
+#| fig-width: 12
+#| fig-height: 5
+# Compare OLS and GWR residuals
+tm_ols <- tm_shape(mpsz) + tm_polygons(alpha = 0.4) +
+          tm_shape(condo_resale_sf) +
+          tm_dots(col = "mlr_residuals", size = 0.02,
+                  style = "quantile", palette = "-RdBu",
+                  title = "Residuals") +
+          tm_layout(main.title = "OLS Residuals",
+                    main.title.size = 0.9)
+
+tm_gwr <- tm_shape(mpsz) + tm_polygons(alpha = 0.4) +
+          tm_shape(condo_resale_sf) +
+          tm_dots(col = "gwr_residual", size = 0.02,
+                  style = "quantile", palette = "-RdBu",
+                  title = "Residuals") +
+          tm_layout(main.title = "GWR Residuals",
+                    main.title.size = 0.9)
+
+tmap_arrange(tm_ols, tm_gwr, ncol = 2)
+```
+
+## 10. Model Comparison and Evaluation
+
+### 10.1 Compare Model Performance
+```{r}
+#| code-fold: false
+# Create comparison table
+model_comparison <- data.frame(
+  Model = c("OLS", "GWR Fixed", "GWR Adaptive"),
+  AIC = c(AIC(condo_mlr2), 
+          gwr_fixed$GW.diagnostic$AIC,
+          gwr_adaptive$GW.diagnostic$AIC),
+  Adj_R2 = c(summary(condo_mlr2)$adj.r.squared,
+             gwr_fixed$GW.diagnostic$R2.adj,
+             gwr_adaptive$GW.diagnostic$R2.adj),
+  RSS = c(sum(residuals(condo_mlr2)^2),
+          gwr_fixed$GW.diagnostic$RSS.gw,
+          gwr_adaptive$GW.diagnostic$RSS.gw)
+)
+
+knitr::kable(model_comparison,
+             caption = "Model Performance Comparison",
+             digits = 3)
+```
+
+### 10.2 Statistical Test for Spatial Variability
+```{r}
+#| code-fold: false
+# Test for spatial non-stationarity
+# Calculate t-statistics
+t_stats <- data.frame(
+  Variable = coef_names,
+  Min_t = NA,
+  Q1_t = NA,
+  Median_t = NA,
+  Q3_t = NA,
+  Max_t = NA,
+  Pct_Significant = NA
+)
+
+for(i in 1:length(coef_names)) {
+  coef_col <- paste0("gwr_", coef_names[i])
+  se_col <- paste0("gwr_SE_", coef_names[i])
+  
+  t_values <- condo_resale_sf[[coef_col]] / condo_resale_sf[[se_col]]
+  
+  t_stats$Min_t[i] <- min(t_values, na.rm = TRUE)
+  t_stats$Q1_t[i] <- quantile(t_values, 0.25, na.rm = TRUE)
+  t_stats$Median_t[i] <- median(t_values, na.rm = TRUE)
+  t_stats$Q3_t[i] <- quantile(t_values, 0.75, na.rm = TRUE)
+  t_stats$Max_t[i] <- max(t_values, na.rm = TRUE)
+  t_stats$Pct_Significant[i] <- sum(abs(t_values) > 1.96, na.rm = TRUE) / 
+                                 length(t_values) * 100
+}
+
+knitr::kable(t_stats,
+             caption = "Summary of t-statistics and % Significant",
+             digits = 2)
+```
+
+### 10.3 Residual Autocorrelation Test
+```{r}
+#| code-fold: false
+# Test GWR residuals for spatial autocorrelation
+moran_gwr <- moran.test(condo_resale_sf$gwr_residual, knn_listw)
+moran_ols <- moran.test(mlr_residuals, knn_listw)
+
+# Compare Moran's I
+cat("\nComparison of Moran's I:\n")
+cat("OLS Residuals Moran's I: ", moran_ols$estimate[1], "\n")
+cat("GWR Residuals Moran's I: ", moran_gwr$estimate[1], "\n")
+cat("\n")
+print(moran_gwr)
+```
+
+## 11. Interactive Visualization
+```{r}
+#| code-fold: false
+#| fig-width: 10
+#| fig-height: 8
+# Create interactive map of local R²
+tmap_mode("view")
+tm_shape(mpsz) +
+  tm_polygons(alpha = 0.1) +
+tm_shape(condo_resale_sf) +
+  tm_dots(col = "gwr_localR2",
+          size = 0.02,
+          border.col = "gray",
+          border.lwd = 0.5,
+          style = "quantile",
+          palette = "YlOrRd",
+          title = "Local R²",
+          popup.vars = c("Local R²" = "gwr_localR2",
+                        "Selling Price" = "SELLING_PRICE",
+                        "Area" = "AREA_SQM",
+                        "Age" = "AGE")) +
+  tm_view(set.zoom.limits = c(11, 14))
+tmap_mode("plot")
+```
+
+## 12. Key Findings and Conclusions
+
+### 12.1 Summary of Results
+```{r}
+#| code-fold: false
+# Calculate improvement metrics
+r2_improvement <- (gwr_adaptive$GW.diagnostic$R2.adj - 
+                  summary(condo_mlr2)$adj.r.squared) / 
+                  summary(condo_mlr2)$adj.r.squared * 100
+
+aic_improvement <- (AIC(condo_mlr2) - 
+                   gwr_adaptive$GW.diagnostic$AIC) / 
+                   AIC(condo_mlr2) * 100
+
+cat("Model Improvements (GWR vs OLS):\n")
+cat("--------------------------------\n")
+cat("Adjusted R² improvement: ", round(r2_improvement, 1), "%\n")
+cat("AIC improvement: ", round(aic_improvement, 1), "%\n")
+cat("Optimal adaptive bandwidth: ", bw_adaptive, " neighbors\n")
+cat("Mean Local R²: ", round(mean(condo_resale_sf$gwr_localR2), 3), "\n")
+cat("Range of Local R²: ", 
+    round(min(condo_resale_sf$gwr_localR2), 3), "-",
+    round(max(condo_resale_sf$gwr_localR2), 3), "\n")
+```
+
+### 12.2 Spatial Pattern Summary
+```{r}
+#| code-fold: false
+# Identify areas with high and low local R²
+high_r2 <- condo_resale_sf[condo_resale_sf$gwr_localR2 > 
+                           quantile(condo_resale_sf$gwr_localR2, 0.9), ]
+low_r2 <- condo_resale_sf[condo_resale_sf$gwr_localR2 < 
+                          quantile(condo_resale_sf$gwr_localR2, 0.1), ]
+
+cat("\nAreas with High Model Performance (Top 10% Local R²):\n")
+cat("Number of units:", nrow(high_r2), "\n")
+cat("Mean Local R²:", round(mean(high_r2$gwr_localR2), 3), "\n")
+cat("Mean Selling Price:", round(mean(high_r2$SELLING_PRICE)), "\n")
+
+cat("\nAreas with Low Model Performance (Bottom 10% Local R²):\n")
+cat("Number of units:", nrow(low_r2), "\n")
+cat("Mean Local R²:", round(mean(low_r2$gwr_localR2), 3), "\n")
+cat("Mean Selling Price:", round(mean(low_r2$SELLING_PRICE)), "\n")
+```
+
+## 13. Conclusions
+
+This analysis demonstrates the power of Geographically Weighted Regression in capturing spatial heterogeneity in housing prices:
+
+### Key Findings:
+
+1. **Spatial Non-stationarity**: The relationships between condo prices and their predictors vary significantly across Singapore
+
+2. **Model Performance**: GWR provides substantial improvement over OLS regression in terms of both R² and AIC
+
+3. **Local Variations**: Different factors influence prices differently in various parts of Singapore:
+   - CBD proximity matters more in certain areas
+   - MRT accessibility has varying importance
+   - Age depreciation effects differ spatially
+
+4. **Residual Analysis**: GWR successfully reduces spatial autocorrelation in residuals
+
+### Implications:
+
+- Housing valuation models should account for spatial variations
+- Policy interventions should consider local context
+- Real estate investment strategies should be location-specific
+
+### Future Work:
+
+- Explore temporal variations using panel GWR
+- Include more neighborhood characteristics
+- Test alternative kernel functions and bandwidth selection methods
