@@ -48,10 +48,10 @@ format:
     theme: cosmo
     toc: true
     code-fold: true
-    self-contained: false   # 地图/plotly更稳，体积更小
+    self-contained: false   
 
 execute:
-  freeze: auto              # 只重跑改动页面
-  cache: true               # 代码块缓存，加速渲染
+  freeze: auto              
+  cache: true               
 
 editor: visual
