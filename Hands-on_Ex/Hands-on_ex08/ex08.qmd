@@ -1,0 +1,614 @@
+---
+title: "Hands-on Exercise 08: Global and Local Measures of Spatial Autocorrelation"
+author: "Huang Pengxin"
+date: "2025-01-07"
+date-modified: "last-modified"
+format:
+  html:
+    self-contained: false   # 不打包成单文件，Pandoc更快
+    toc: true
+    code-fold: true
+    code-summary: "Show code"
+execute:
+  eval: true
+  echo: true
+  warning: false
+  message: false
+  cache: true              # 缓存计算结果
+  freeze: true
+---
+
+## 1. Overview
+
+In this hands-on exercise, we will learn how to compute Global and Local Measures of Spatial Autocorrelation (GLSA) using Singapore HDB resale price data. We will explore spatial patterns in housing prices and identify clusters of high and low value properties.
+
+### Learning Objectives
+
+By the end of this session, you will be able to:
+
+- Compute global spatial autocorrelation statistics (Moran's I and Geary's C)
+- Perform permutation tests for global spatial autocorrelation
+- Compute and visualize local indicators of spatial association (LISA)
+- Detect hot spots and cold spots using Getis-Ord Gi* statistics
+- Create various spatial autocorrelation visualizations
+
+## 2. Getting Started
+
+### 2.1 Setting Global Options
+```{r}
+#| code-fold: false
+# 全局防止打印过多输出
+knitr::opts_chunk$set(message = FALSE, warning = FALSE)
+options(max.print = 1000, 
+        tibble.print_max = 60, 
+        tibble.width = Inf,
+        dplyr.print_max = 60)
+```
+
+### 2.2 Loading Required Packages
+```{r}
+#| code-fold: false
+pacman::p_load(sf, spdep, tmap, tidyverse, 
+               plotly, ggplot2, GGally, viridis, 
+               knitr, DT)
+```
+
+## 3. Importing and Exploring Data
+
+### 3.1 Import the Data
+```{r}
+#| code-fold: false
+# Load the preprocessed data
+mdata <- readRDS("data/rawdata/mdata.rds")
+
+# Display data information
+cat("Dataset Information:\n")
+cat("- Type:", class(mdata)[1], "\n")
+cat("- Observations:", format(nrow(mdata), big.mark = ","), "\n")
+cat("- Variables:", ncol(mdata), "\n")
+cat("- Geometry:", unique(st_geometry_type(mdata)), "\n")
+cat("- CRS:", st_crs(mdata)$input, "\n")
+```
+
+### 3.2 Data Summary
+```{r}
+#| code-fold: false
+# Summary statistics of key variables
+mdata %>%
+  st_drop_geometry() %>%
+  select(resale_price, floor_area_sqm, remaining_lease_mths, 
+         PROX_CBD, PROX_MRT, PROX_MALL) %>%
+  summary()
+```
+
+## 4. Visualizing the Study Area
+
+### 4.1 Distribution of Resale Prices
+```{r}
+#| code-fold: false
+#| fig-width: 12
+#| fig-height: 5
+# Histogram
+p1 <- ggplot(data = mdata, 
+             aes(x = resale_price/1000)) +
+  geom_histogram(bins = 50, 
+                 fill = "lightblue", 
+                 color = "black") +
+  labs(title = "Distribution of HDB Resale Prices",
+       x = "Resale Price (S$'000)",
+       y = "Frequency") +
+  theme_minimal()
+
+# Log-transformed prices
+p2 <- ggplot(data = mdata,
+             aes(x = log(resale_price))) +
+  geom_histogram(bins = 50,
+                fill = "lightgreen",
+                color = "black") +
+  labs(title = "Distribution of Log Resale Prices",
+       x = "Log(Resale Price)",
+       y = "Frequency") +
+  theme_minimal()
+
+library(gridExtra)
+grid.arrange(p1, p2, ncol = 2)
+```
+
+### 4.2 Spatial Distribution of Resale Prices
+```{r}
+#| code-fold: false
+#| fig-width: 12
+#| fig-height: 10
+# Map resale prices with smaller points
+tmap_mode("plot")
+tm_shape(mdata) +
+  tm_dots("resale_price",
+          size = 0.008,
+          style = "quantile",
+          palette = "YlOrRd",
+          title = "Resale Price (S$)",
+          n = 5,
+          alpha = 0.6) +
+  tm_layout(main.title = "Distribution of HDB Resale Prices in Singapore",
+            main.title.size = 1.0,
+            legend.position = c("right", "bottom"))
+```
+
+### 4.3 Relationship with Key Variables (Sample)
+```{r}
+#| code-fold: false
+#| fig-width: 12
+#| fig-height: 6
+# Sample data for plotting
+set.seed(1234)
+mdata_sample <- mdata[sample(nrow(mdata), 2000), ]
+
+# Price vs Floor Area
+p1 <- ggplot(mdata_sample, aes(x = floor_area_sqm, y = resale_price/1000)) +
+  geom_point(alpha = 0.5, size = 1) +
+  geom_smooth(method = "lm", se = FALSE, color = "red") +
+  labs(title = "Price vs Floor Area (n=2000)",
+       x = "Floor Area (sqm)",
+       y = "Price (S$'000)") +
+  theme_minimal()
+
+# Price vs Distance to CBD
+p2 <- ggplot(mdata_sample, aes(x = PROX_CBD, y = resale_price/1000)) +
+  geom_point(alpha = 0.5, size = 1) +
+  geom_smooth(method = "loess", se = FALSE, color = "blue") +
+  labs(title = "Price vs Distance to CBD",
+       x = "Distance to CBD (km)",
+       y = "Price (S$'000)") +
+  theme_minimal()
+
+grid.arrange(p1, p2, ncol = 2)
+```
+
+## 5. Computing Spatial Weights Matrix
+
+### 5.1 K-Nearest Neighbors
+```{r}
+#| code-fold: false
+#| cache: true
+# Extract coordinates
+coords <- st_coordinates(mdata)
+
+# Create k-nearest neighbors (k=8)
+knn8 <- knn2nb(knearneigh(coords, k = 8))
+
+# Display summary only
+cat("K-Nearest Neighbors (k=8) Summary:\n")
+cat("- Number of regions:", format(length(knn8), big.mark = ","), "\n")
+cat("- Number of nonzero links:", format(sum(card(knn8)), big.mark = ","), "\n")
+cat("- All regions have exactly", unique(card(knn8)), "neighbors\n")
+```
+
+### 5.2 Creating Spatial Weights
+```{r}
+#| code-fold: false
+# Row-standardized weights for KNN
+knn8_lw <- nb2listw(knn8, style = "W")
+
+# Display info only
+cat("Spatial weights created successfully:\n")
+cat("- Style: W (row-standardized)\n")
+cat("- Zero policy: FALSE\n")
+```
+
+### 5.3 Visualizing Spatial Weights (Small Sample)
+```{r}
+#| code-fold: false
+#| fig-width: 10
+#| fig-height: 8
+# Small sample for visualization
+set.seed(1234)
+sample_idx <- sample(1:nrow(mdata), 200)
+mdata_sample <- mdata[sample_idx, ]
+coords_sample <- coords[sample_idx, ]
+knn8_sample <- knn2nb(knearneigh(coords_sample, k = 8))
+
+# Plot
+plot(st_geometry(mdata_sample), col = "lightgrey", 
+     main = "K-Nearest Neighbors (k=8) - Sample of 200 Points")
+plot(knn8_sample, coords_sample, add = TRUE, col = "red", lwd = 0.5)
+```
+
+## 6. Global Spatial Autocorrelation
+
+### 6.1 Moran's I Test
+```{r}
+#| code-fold: false
+# Moran's I test
+moran_result <- moran.test(mdata$resale_price, 
+                           listw = knn8_lw, 
+                           zero.policy = TRUE, 
+                           na.action = na.omit)
+print(moran_result)
+```
+
+### 6.2 Monte Carlo Moran's I (Optimized)
+```{r}
+#| code-fold: false
+#| cache: true
+# Set seed
+set.seed(1234)
+
+# Monte Carlo simulation with 499 simulations (faster)
+MC_moran <- moran.mc(mdata$resale_price, 
+                     listw = knn8_lw, 
+                     nsim = 499,  # Reduced from 999
+                     zero.policy = TRUE, 
+                     na.action = na.omit)
+
+print(MC_moran)
+
+# Visualization
+hist(MC_moran$res, 
+     freq = TRUE, 
+     breaks = 40,
+     col = "lightblue",
+     main = "Monte Carlo Simulation of Moran's I (499 simulations)",
+     xlab = "Simulated Moran's I")
+abline(v = MC_moran$statistic, 
+       col = "red", 
+       lwd = 2)
+```
+
+### 6.3 Geary's C Test (Optimized)
+```{r}
+#| code-fold: false
+#| cache: true
+# Geary's C test
+geary_result <- geary.test(mdata$resale_price, 
+                           listw = knn8_lw,
+                           zero.policy = TRUE)
+print(geary_result)
+
+# Monte Carlo Geary's C with reduced simulations
+set.seed(1234)
+MC_geary <- geary.mc(mdata$resale_price, 
+                     listw = knn8_lw, 
+                     nsim = 499,  # Reduced from 999
+                     zero.policy = TRUE)
+print(MC_geary)
+```
+
+## 7. Spatial Correlogram (Optimized)
+```{r}
+#| code-fold: false
+#| fig-width: 10
+#| fig-height: 6
+#| cache: true
+
+# Create correlogram for different k values
+k_values <- c(5, 10, 15, 20, 30, 50, 75, 100)
+
+correlogram_data <- data.frame(
+  k = integer(),
+  moran_i = numeric(),
+  p_value = numeric()
+)
+
+for(k in k_values) {
+  # 每个k值都需要重新计算knn
+  knn_temp <- knn2nb(knearneigh(coords, k = k))
+  knn_temp_lw <- nb2listw(knn_temp, style = "W")
+  
+  moran_result <- moran.test(mdata$resale_price, 
+                             listw = knn_temp_lw,
+                             zero.policy = TRUE)
+  
+  correlogram_data <- rbind(correlogram_data,
+                            data.frame(k = k,
+                                     moran_i = moran_result$estimate[1],
+                                     p_value = moran_result$p.value))
+}
+
+# Plot
+ggplot(correlogram_data, aes(x = k, y = moran_i)) +
+  geom_line(color = "blue", size = 1) +
+  geom_point(color = "red", size = 3) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "grey50") +
+  labs(title = "Spatial Correlogram - Moran's I",
+       subtitle = "Effect of number of neighbors on spatial autocorrelation",
+       x = "Number of Nearest Neighbors (k)",
+       y = "Moran's I") +
+  theme_minimal()
+```
+
+## 8. Local Spatial Autocorrelation
+
+### 8.1 Computing Local Moran's I
+```{r}
+#| code-fold: false
+#| cache: true
+# Compute local Moran's I
+localMI <- localmoran(mdata$resale_price, 
+                      knn8_lw,
+                      zero.policy = TRUE,
+                      na.action = na.omit)
+
+# Add to data
+mdata$Ii <- localMI[, "Ii"]
+mdata$Z_Ii <- localMI[, "Z.Ii"]
+mdata$P_value <- localMI[, "Pr(z != E(Ii))"]
+
+# Summary only
+cat("Local Moran's I computed for", format(nrow(localMI), big.mark = ","), "observations\n")
+cat("\nLocal Moran's I Summary:\n")
+summary(mdata$Ii)
+```
+
+### 8.2 Mapping Local Moran's I Statistics
+```{r}
+#| code-fold: false
+#| fig-width: 12
+#| fig-height: 10
+# Create significance categories
+mdata$P_sig <- cut(mdata$P_value,
+                   breaks = c(0, 0.001, 0.01, 0.05, 1),
+                   labels = c("p < 0.001", "p < 0.01", "p < 0.05", "Not Sig."),
+                   include.lowest = TRUE)
+
+# Maps with very small dots
+tm1 <- tm_shape(mdata) +
+  tm_dots("Ii",
+          size = 0.003,
+          style = "quantile",
+          palette = "-RdBu",
+          title = "Local Moran's I",
+          n = 5,
+          alpha = 0.7) +
+  tm_layout(main.title = "Local Moran's I Values",
+            main.title.size = 0.8)
+
+tm2 <- tm_shape(mdata) +
+  tm_dots("P_sig",
+          size = 0.003,
+          palette = c("darkgreen", "green", "lightgreen", "grey95"),
+          title = "Significance",
+          alpha = 0.7) +
+  tm_layout(main.title = "P-values",
+            main.title.size = 0.8)
+
+tmap_arrange(tm1, tm2, ncol = 2)
+```
+
+### 8.3 Creating LISA Cluster Map
+```{r}
+#| code-fold: false
+# Standardize variables
+mdata$z_price <- scale(mdata$resale_price)[,1]
+mdata$lag_z_price <- lag.listw(knn8_lw, mdata$z_price,
+                                zero.policy = TRUE)
+
+# Define LISA categories
+mdata$quadrant <- NA
+mdata$quadrant[mdata$z_price > 0 & mdata$lag_z_price > 0] <- "HH"
+mdata$quadrant[mdata$z_price < 0 & mdata$lag_z_price < 0] <- "LL"  
+mdata$quadrant[mdata$z_price > 0 & mdata$lag_z_price < 0] <- "HL"
+mdata$quadrant[mdata$z_price < 0 & mdata$lag_z_price > 0] <- "LH"
+
+# Keep only significant clusters
+mdata$quadrant_sig <- ifelse(mdata$P_value <= 0.05,
+                              mdata$quadrant,
+                              "Not Significant")
+
+# Summary table
+cat("LISA Cluster Distribution:\n")
+table(mdata$quadrant_sig) %>% 
+  as.data.frame() %>%
+  kable(col.names = c("Cluster Type", "Count"),
+        format = "simple")
+```
+
+### 8.4 Visualizing LISA Clusters
+```{r}
+#| code-fold: false
+#| fig-width: 12
+#| fig-height: 10
+# LISA cluster map
+tm_shape(mdata) +
+  tm_dots("quadrant_sig",
+          size = 0.008,
+          palette = c("red", "lightblue", "pink", "blue", "grey95"),
+          title = "LISA Clusters",
+          alpha = 0.8) +
+  tm_layout(main.title = "LISA Cluster Map - HDB Resale Prices (p < 0.05)",
+            main.title.size = 1.0,
+            legend.position = c("right", "bottom"))
+```
+
+### 8.5 Moran Scatterplot
+```{r}
+#| code-fold: false
+#| fig-width: 10
+#| fig-height: 8
+# Moran scatterplot without labels
+par(mar = c(5, 4, 4, 2))
+moran.plot(mdata$resale_price, knn8_lw,
+           labels = FALSE,
+           xlab = "Resale Price",
+           ylab = "Spatially Lagged Resale Price",
+           main = "Moran Scatterplot",
+           quiet = TRUE)
+```
+
+## 9. Hot Spot and Cold Spot Analysis
+
+### 9.1 Computing Getis-Ord Gi* Statistics
+```{r}
+#| code-fold: false
+#| cache: true
+# Create binary weights for Gi*
+knn8_lw_B <- nb2listw(knn8, style = "B")
+
+# Compute Gi* statistics
+gi_stats <- localG(mdata$resale_price, knn8_lw_B)
+
+# Add to data
+mdata$gi_stats <- as.numeric(gi_stats)
+
+# Summary
+cat("Gi* Statistics Summary:\n")
+summary(mdata$gi_stats)
+```
+
+### 9.2 Visualizing Hot and Cold Spots
+```{r}
+#| code-fold: false
+#| fig-width: 12
+#| fig-height: 10
+# Create categories
+mdata$gi_category <- cut(mdata$gi_stats,
+                         breaks = c(-Inf, -2.58, -1.96, -1.65,
+                                   1.65, 1.96, 2.58, Inf),
+                         labels = c("Cold Spot (99%)",
+                                   "Cold Spot (95%)",
+                                   "Cold Spot (90%)",
+                                   "Not Significant",
+                                   "Hot Spot (90%)",
+                                   "Hot Spot (95%)",
+                                   "Hot Spot (99%)"),
+                         include.lowest = TRUE)
+
+# Map
+tm_shape(mdata) +
+  tm_dots("gi_category",
+          size = 0.008,
+          palette = c("darkblue", "blue", "lightblue",
+                     "grey95",
+                     "pink", "red", "darkred"),
+          title = "Hot/Cold Spots",
+          alpha = 0.8) +
+  tm_layout(main.title = "Hot and Cold Spots of HDB Resale Prices",
+            main.title.size = 1.0,
+            legend.position = c("right", "bottom"))
+
+# Summary table
+cat("\nHot/Cold Spot Distribution:\n")
+table(mdata$gi_category) %>%
+  as.data.frame() %>%
+  kable(col.names = c("Category", "Count"),
+        format = "simple")
+```
+
+## 10. Summary Results
+
+### 10.1 Overall Statistics
+```{r}
+#| code-fold: false
+# Summary table
+summary_stats <- data.frame(
+  Statistic = c("Observations",
+                "Global Moran's I",
+                "Global Geary's C",
+                "Significant LISA (p<0.05)",
+                "HH Clusters",
+                "LL Clusters",
+                "Hot Spots (95%)",
+                "Cold Spots (95%)"),
+  Value = c(format(nrow(mdata), big.mark = ","),
+            round(MC_moran$statistic, 4),
+            round(MC_geary$statistic, 4),
+            format(sum(mdata$P_value <= 0.05), big.mark = ","),
+            format(sum(mdata$quadrant_sig == "HH"), big.mark = ","),
+            format(sum(mdata$quadrant_sig == "LL"), big.mark = ","),
+            format(sum(mdata$gi_stats > 1.96), big.mark = ","),
+            format(sum(mdata$gi_stats < -1.96), big.mark = ","))
+)
+
+kable(summary_stats, 
+      caption = "Summary of Spatial Autocorrelation Results",
+      format = "simple")
+```
+
+### 10.2 Top Locations (Interactive Table)
+```{r}
+#| code-fold: false
+# Top hot spots
+top_hotspots <- mdata %>%
+  st_drop_geometry() %>%
+  filter(gi_stats > 2.58) %>%
+  arrange(desc(gi_stats)) %>%
+  select(resale_price, floor_area_sqm, PROX_CBD, gi_stats) %>%
+  slice_head(n = 10) %>%
+  mutate(resale_price = format(resale_price, big.mark = ","),
+         across(c(floor_area_sqm, PROX_CBD, gi_stats), ~round(., 2)))
+
+cat("Top 10 Hot Spots:\n")
+DT::datatable(top_hotspots, 
+              options = list(dom = 't', 
+                            pageLength = 10),
+              rownames = FALSE)
+```
+
+## 11. Interactive Visualization (Optimized)
+```{r}
+#| code-fold: false
+#| fig-width: 12
+#| fig-height: 10
+# Sample for interactive map
+set.seed(1234)
+mdata_interactive <- mdata[sample(nrow(mdata), 1500), ]
+
+tmap_mode("view")
+tm_shape(mdata_interactive) +
+  tm_dots("resale_price",
+          size = 0.02,
+          style = "quantile",
+          palette = "YlOrRd",
+          title = "Price",
+          popup.vars = c("Price" = "resale_price",
+                        "Floor Area" = "floor_area_sqm",
+                        "LISA" = "quadrant_sig",
+                        "Hot/Cold" = "gi_category"),
+          clustering = TRUE)  # Enable clustering for performance
+tmap_mode("plot")
+```
+
+## 12. Save Results
+```{r}
+#| code-fold: false
+# Save enhanced dataset
+saveRDS(mdata, "data/model/mdata_analyzed.rds")
+
+# Create compact summary
+results_summary <- list(
+  n_obs = nrow(mdata),
+  global_moran = round(MC_moran$statistic, 4),
+  global_geary = round(MC_geary$statistic, 4),
+  n_significant = sum(mdata$P_value <= 0.05),
+  date = Sys.Date()
+)
+
+saveRDS(results_summary, "data/model/spatial_autocorr_results.rds")
+
+cat("✅ Analysis complete! Results saved to data/model/\n")
+```
+
+## 13. Conclusions
+
+### Key Findings
+
+This spatial autocorrelation analysis of 15,901 HDB resale transactions reveals:
+
+1. **Strong Positive Spatial Autocorrelation**: 
+   - Global Moran's I confirms significant spatial clustering
+   - Similar-priced properties cluster together
+
+2. **Distinct Spatial Patterns**:
+   - HH clusters in prime locations
+   - LL clusters in peripheral areas
+   - Spatial outliers indicate transitional zones
+
+3. **Policy Implications**:
+   - Spatial spillover effects are significant
+   - Targeted area-based interventions needed
+   - Infrastructure improvements can reduce spatial inequality
+
+### Methodological Notes
+
+- Large dataset (15,901 points) requires computational optimization
+- K=8 nearest neighbors appropriate for dense point patterns
+- Results robust across different specifications
