@@ -2,21 +2,19 @@
 title: "Hands-on Exercise 08: Global and Local Measures of Spatial Autocorrelation"
 author: "Huang Pengxin"
 date: "2025-01-07"
-date-modified: "last-modified"
-format:
-  html:
-    self-contained: false   # 不打包成单文件，Pandoc更快
-    toc: true
-    code-fold: true
-    code-summary: "Show code"
 execute:
   eval: true
   echo: true
   warning: false
-  message: false
-  cache: true              # 缓存计算结果
-  freeze: true
+  freeze: true   # ✅ 关键：允许 freeze
+format:
+  html:
+    toc: true
+    code-fold: true
+    self-contained: false   # ✅ 避免打包 JS/CSS
+    df-print: paged
 ---
+
 
 ## 1. Overview
 
