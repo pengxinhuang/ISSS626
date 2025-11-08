@@ -1,6 +1,6 @@
 ---
 title: "Hands-on Exercise 04: Spatial Weights and Applications"
-author: "Your Name"
+author: "HUANG PENGXIN"
 date: "`r Sys.Date()`"
 format: 
   html:

@@ -4,6 +4,3 @@ format: html
 ---
 
 Welcome! This is my course website for **ISSS626**.
-
--   **Hands-on** → see *Ex01a* in the navbar.
--   **In-class / Take-home** pages are placeholders for now.

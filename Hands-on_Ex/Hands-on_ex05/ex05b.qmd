@@ -1,6 +1,6 @@
 ---
 title: "Hands-on Exercise 05b: Local Measures of Spatial Autocorrelation"
-author: "Your Name"
+author: "HUANG PENGXIN"
 date: "`r Sys.Date()`"
 format: 
   html:
@@ -25,12 +25,12 @@ Local Measures of Spatial Autocorrelation (LMSA) focus on the relationships betw
 
 In this hands-on exercise, you will learn how to compute Local Measures of Spatial Autocorrelation (LMSA) by using **sfdep** package. By the end of this hands-on exercise, you will be able to:
 
-- Import geospatial data using appropriate function(s) of **sf** package
-- Import csv file using appropriate function of **readr** package
-- Perform relational join using appropriate join function of **dplyr** package
-- Compute Local Indicator of Spatial Association (LISA) statistics for detecting clusters and outliers by using appropriate functions of **sfdep** package
-- Compute Getis-Ord's Gi-statistics for detecting hot spot or/and cold spot area by using appropriate functions of **sfdep** package
-- Visualise the analysis output by using **tmap** package
+-   Import geospatial data using appropriate function(s) of **sf** package
+-   Import csv file using appropriate function of **readr** package
+-   Perform relational join using appropriate join function of **dplyr** package
+-   Compute Local Indicator of Spatial Association (LISA) statistics for detecting clusters and outliers by using appropriate functions of **sfdep** package
+-   Compute Getis-Ord's Gi-statistics for detecting hot spot or/and cold spot area by using appropriate functions of **sfdep** package
+-   Visualise the analysis output by using **tmap** package
 
 ## The Analytical Question
 
@@ -44,8 +44,8 @@ In this case study, we are interested to examine the spatial pattern of a select
 
 Two data sets will be used in this hands-on exercise:
 
-- **Hunan province administrative boundary layer at county level**: This is a geospatial data set in ESRI shapefile format
-- **Hunan_2012.csv**: This csv file contains selected Hunan's local development indicators in 2012
+-   **Hunan province administrative boundary layer at county level**: This is a geospatial data set in ESRI shapefile format
+-   **Hunan_2012.csv**: This csv file contains selected Hunan's local development indicators in 2012
 
 # Getting Started
 
@@ -53,10 +53,10 @@ Two data sets will be used in this hands-on exercise:
 
 Before we get started, we need to ensure that **sf**, **sfdep**, **tmap** and **tidyverse** packages are installed and loaded.
 
-- **sf** is used for importing and handling geospatial data in R
-- **tidyverse** is mainly used for wrangling attribute data in R
-- **sfdep** will be used to compute spatial weights, global and local spatial autocorrelation statistics
-- **tmap** will be used to prepare cartographic quality choropleth maps
+-   **sf** is used for importing and handling geospatial data in R
+-   **tidyverse** is mainly used for wrangling attribute data in R
+-   **sfdep** will be used to compute spatial weights, global and local spatial autocorrelation statistics
+-   **tmap** will be used to prepare cartographic quality choropleth maps
 
 ```{r}
 #| label: load-packages
@@ -144,9 +144,7 @@ tmap_arrange(equal,
              ncol = 2)
 ```
 
-**Questions to consider:**
-- Does the plot above reveal any outliers or clusters?
-- Does the plot above indicate the presence of hot spots or cold spots?
+**Questions to consider:** - Does the plot above reveal any outliers or clusters? - Does the plot above indicate the presence of hot spots or cold spots?
 
 # Local Indicators of Spatial Association (LISA)
 
@@ -185,10 +183,7 @@ To reveal the neighbour list, code chunk below is used:
 summary(nb)
 ```
 
-The summary report shows that:
-- There are **88 area units** in Hunan
-- The most connected area unit has **11 neighbours**
-- There are **two area units** with only **one neighbour**
+The summary report shows that: - There are **88 area units** in Hunan - The most connected area unit has **11 neighbours** - There are **two area units** with only **one neighbour**
 
 ## Computing local Moran's I
 
@@ -206,15 +201,7 @@ lisa <- hunan %>%
 glimpse(lisa)
 ```
 
-The `local_moran()` function returns a data frame with the following columns:
-- **ii**: the local Moran's I statistics
-- **eii**: the expectation of local moran statistic under the randomisation hypothesis
-- **var_ii**: the variance of local moran statistic under the randomisation hypothesis
-- **z_ii**: the standard deviate of local moran statistic
-- **p_ii**: the p-value of local moran statistic
-- **mean**: classification based on mean
-- **median**: classification based on median
-- **pysal**: classification following PySAL convention
+The `local_moran()` function returns a data frame with the following columns: - **ii**: the local Moran's I statistics - **eii**: the expectation of local moran statistic under the randomisation hypothesis - **var_ii**: the variance of local moran statistic under the randomisation hypothesis - **z_ii**: the standard deviate of local moran statistic - **p_ii**: the p-value of local moran statistic - **mean**: classification based on mean - **median**: classification based on median - **pysal**: classification following PySAL convention
 
 ## Visualising local Moran's I
 
@@ -463,22 +450,17 @@ tmap_arrange(ii_map, p_ii_map, lisa_map, asp = 1, ncol = 2)
 
 ### Statistical Observations from LISA Map
 
-The LISA map reveals:
-- **High-High clusters (Hot spots)**: Areas of high GDPPC surrounded by high GDPPC neighbors
-- **Low-Low clusters (Cold spots)**: Areas of low GDPPC surrounded by low GDPPC neighbors
-- **Low-High outliers**: Low GDPPC areas surrounded by high GDPPC neighbors
-- **High-Low outliers**: High GDPPC areas surrounded by low GDPPC neighbors
-- **Insignificant areas**: No significant local spatial autocorrelation
+The LISA map reveals: - **High-High clusters (Hot spots)**: Areas of high GDPPC surrounded by high GDPPC neighbors - **Low-Low clusters (Cold spots)**: Areas of low GDPPC surrounded by low GDPPC neighbors - **Low-High outliers**: Low GDPPC areas surrounded by high GDPPC neighbors - **High-Low outliers**: High GDPPC areas surrounded by low GDPPC neighbors - **Insignificant areas**: No significant local spatial autocorrelation
 
 # Hot Spots and Cold Spots Analysis (HCSA)
 
 Hot spots and cold spots analysis is a technique used in spatial statistics to identify statistically significant clusters of high values (hot spots) and low values (cold spots).
 
-HCSA uses the Getis-Ord Gi* statistic to determine if the observed clustering is statistically significant.
+HCSA uses the Getis-Ord Gi\* statistic to determine if the observed clustering is statistically significant.
 
 ## Deriving distance weight matrix
 
-For Getis-Ord Gi* statistics, we define neighbours based on distance.
+For Getis-Ord Gi\* statistics, we define neighbours based on distance.
 
 ### Determine the cut-off distance
 
@@ -544,7 +526,7 @@ wm_ad_weights <- st_weights(wm_ad)
 summary(wm_ad)
 ```
 
-## Computing local Gi* statistics
+## Computing local Gi\* statistics
 
 ### Using fixed distance weights
 
@@ -582,7 +564,7 @@ glimpse(HCSA_adw)
 
 ## Visualising HCSA
 
-### Mapping Gi* with fixed distance weights
+### Mapping Gi\* with fixed distance weights
 
 ```{r}
 #| label: map-gi-fixed
@@ -604,7 +586,7 @@ tm_shape(HCSA_fdw) +
   tm_grid(alpha = 0.2)
 ```
 
-### Mapping local Gi* p-values
+### Mapping local Gi\* p-values
 
 ```{r}
 #| label: map-gi-pvalues
@@ -626,7 +608,7 @@ tm_shape(HCSA_fdw) +
   tm_grid(alpha = 0.2)
 ```
 
-### Mapping both Gi* values and p-values
+### Mapping both Gi\* values and p-values
 
 ```{r}
 #| label: map-both-gi
@@ -765,28 +747,29 @@ tmap_arrange(HCSA_fixed, HCSA_adaptive, asp = 1, ncol = 2)
 In this hands-on exercise, we have:
 
 ## LISA Analysis Results
-1. **Identified local clusters and outliers** using Local Moran's I:
-   - High-High clusters: Counties with high GDPPC surrounded by high GDPPC neighbors
-   - Low-Low clusters: Counties with low GDPPC surrounded by low GDPPC neighbors
-   - Spatial outliers: High-Low and Low-High patterns
 
-2. **Visualized spatial relationships** through:
-   - Moran scatterplots showing the relationship between values and their spatial lags
-   - LISA cluster maps highlighting significant local patterns
+1.  **Identified local clusters and outliers** using Local Moran's I:
+    -   High-High clusters: Counties with high GDPPC surrounded by high GDPPC neighbors
+    -   Low-Low clusters: Counties with low GDPPC surrounded by low GDPPC neighbors
+    -   Spatial outliers: High-Low and Low-High patterns
+2.  **Visualized spatial relationships** through:
+    -   Moran scatterplots showing the relationship between values and their spatial lags
+    -   LISA cluster maps highlighting significant local patterns
 
 ## HCSA Analysis Results
-3. **Detected hot spots and cold spots** using Getis-Ord Gi* statistics:
-   - Hot spots: Significant clusters of high GDPPC values
-   - Cold spots: Significant clusters of low GDPPC values
 
-4. **Compared different spatial weight schemes**:
-   - Fixed distance weights (62km threshold)
-   - Adaptive distance weights (k=8 nearest neighbors)
+3.  **Detected hot spots and cold spots** using Getis-Ord Gi\* statistics:
+    -   Hot spots: Significant clusters of high GDPPC values
+    -   Cold spots: Significant clusters of low GDPPC values
+4.  **Compared different spatial weight schemes**:
+    -   Fixed distance weights (62km threshold)
+    -   Adaptive distance weights (k=8 nearest neighbors)
 
 ## Key Findings
-- Economic development in Hunan Province shows clear **spatial clustering**
-- **Hot spots** (high GDPPC clusters) are concentrated in specific regions
-- **Cold spots** (low GDPPC clusters) indicate areas needing development attention
-- The choice of spatial weights (fixed vs adaptive) can influence the detection of clusters
+
+-   Economic development in Hunan Province shows clear **spatial clustering**
+-   **Hot spots** (high GDPPC clusters) are concentrated in specific regions
+-   **Cold spots** (low GDPPC clusters) indicate areas needing development attention
+-   The choice of spatial weights (fixed vs adaptive) can influence the detection of clusters
 
 These local measures complement the global measures from Exercise 05a by showing **where** the spatial clustering occurs, providing actionable insights for policy makers and planners.

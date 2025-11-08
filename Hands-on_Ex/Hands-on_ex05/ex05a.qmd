@@ -1,6 +1,6 @@
 ---
 title: "Hands-on Exercise 05a: Global Measures of Spatial Autocorrelation"
-author: "Your Name"
+author: "HUANG PENGXIN"
 date: "`r Sys.Date()`"
 format: 
   html:
