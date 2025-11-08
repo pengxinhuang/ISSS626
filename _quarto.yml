@@ -44,8 +44,10 @@ format:
     theme: cosmo
     toc: true
     code-fold: true
+    self-contained: false   # ✅ 推荐补上这一行
 
 execute:
   freeze: auto
+  cache: true               # ✅ 建议加上缓存
 
 editor: visual
