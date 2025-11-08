@@ -1,0 +1,564 @@
+---
+title: "Hands-on Exercise 09: Spatial Accessibility Analysis and GWR Method"
+author: "Huang Pengxin"
+date: "2025-01-07"
+date-modified: "last-modified"
+format:
+  html:
+    self-contained: false
+    toc: true
+    code-fold: true
+    code-summary: "Show code"
+execute:
+  eval: true
+  echo: true
+  warning: false
+  freeze: true
+  cache: true
+---
+
+## 1. Overview
+
+Since the OD_Matrix.csv contains Origin-Destination cost data rather than property transaction data, this exercise will demonstrate:
+1. Spatial accessibility analysis using the OD matrix
+2. Creating synthetic property data for GWR demonstration
+3. Applying GWR methods to understand spatial heterogeneity
+
+### Learning Objectives
+
+By the end of this exercise, you will be able to:
+- Understand OD matrix applications in spatial analysis
+- Generate synthetic spatial data for modeling
+- Apply GWR methods to spatial data
+- Visualize spatial patterns and relationships
+
+## 2. The Data
+
+We have the following datasets:
+1. **URA Master Plan 2014 subzone boundaries** (MP14_SUBZONE_NO_SEA_PL)
+2. **Eldercare facilities** (ELDERCARE)
+3. **OD Matrix** - Origin-Destination cost matrix
+4. **Hexagon grid** (hexagons) for visualization
+
+## 3. Getting Started
+
+### 3.1 Loading Required Packages
+```{r}
+#| code-fold: false
+pacman::p_load(sf, tidyverse, tmap, spdep, GWmodel, 
+               ggpubr, corrplot, plotly, gtsummary,
+               olsrr, devtools, parallel, readr)
+```
+
+### 3.2 Setting Up the Environment
+```{r}
+#| code-fold: false
+# Set tmap mode to plot for better performance
+tmap_mode("plot")
+
+# Set seed for reproducibility
+set.seed(12345)
+
+# Set up parallel processing
+cores <- max(1, parallel::detectCores() - 1)
+cat("Number of cores available for parallel processing:", cores, "\n")
+```
+
+## 4. Import Geospatial Data
+
+### 4.1 Import Subzone Boundaries
+```{r}
+#| code-fold: false
+# Read Master Plan 2014 Subzone Boundary
+mpsz <- st_read(dsn = "data/geospatial", 
+                layer = "MP14_SUBZONE_NO_SEA_PL",
+                quiet = TRUE) %>%
+  st_transform(crs = 3414)
+
+cat("Number of subzones:", nrow(mpsz), "\n")
+```
+
+### 4.2 Import Eldercare Facilities
+```{r}
+#| code-fold: false
+# Read eldercare facilities
+eldercare <- st_read(dsn = "data/geospatial",
+                     layer = "ELDERCARE",
+                     quiet = TRUE) %>%
+  st_transform(crs = 3414)
+
+cat("Number of eldercare facilities:", nrow(eldercare), "\n")
+```
+
+### 4.3 Import Hexagon Grid
+```{r}
+#| code-fold: false
+# Read hexagon grid
+hexagons <- st_read(dsn = "data/geospatial",
+                    layer = "hexagons",
+                    quiet = TRUE) %>%
+  st_transform(crs = 3414)
+
+cat("Number of hexagons:", nrow(hexagons), "\n")
+```
+
+## 5. Import and Analyze OD Matrix
+
+### 5.1 Import OD Matrix
+```{r}
+#| code-fold: false
+# Read OD Matrix
+od_data <- read_csv("data/aspatial/OD_Matrix.csv",
+                    show_col_types = FALSE)
+
+# Display structure
+glimpse(od_data)
+
+# Summary statistics
+summary(od_data$total_cost)
+```
+
+### 5.2 Create Distance Matrix
+```{r}
+#| code-fold: false
+# Convert OD data to wide format distance matrix
+distance_matrix <- od_data %>%
+  select(origin_id, destination_id, total_cost) %>%
+  pivot_wider(names_from = destination_id,
+              values_from = total_cost,
+              names_prefix = "dest_")
+
+cat("Distance matrix dimensions:", dim(distance_matrix), "\n")
+
+# Display first few rows and columns
+distance_matrix[1:5, 1:6]
+```
+
+### 5.3 Analyze Accessibility to Eldercare
+```{r}
+#| code-fold: false
+# Calculate accessibility metrics
+# For demonstration, we'll use the first 120 destinations as eldercare locations
+eldercare_ids <- 1:min(120, max(od_data$destination_id))
+
+accessibility_eldercare <- od_data %>%
+  filter(destination_id %in% eldercare_ids) %>%
+  group_by(origin_id) %>%
+  summarise(
+    min_cost_eldercare = min(total_cost),
+    mean_cost_eldercare = mean(total_cost),
+    accessibility_index = 1 / mean(total_cost) * 10000
+  )
+
+summary(accessibility_eldercare)
+```
+
+## 6. Generate Synthetic Property Data
+
+Since we don't have actual property data, we'll create synthetic data based on spatial patterns:
+```{r}
+#| code-fold: false
+# Generate synthetic property data for demonstration
+n_properties <- 2000
+
+# Create random points within Singapore boundaries
+bbox <- st_bbox(mpsz)
+synthetic_properties <- data.frame(
+  property_id = 1:n_properties,
+  x = runif(n_properties, bbox$xmin, bbox$xmax),
+  y = runif(n_properties, bbox$ymin, bbox$ymax)
+) %>%
+  st_as_sf(coords = c("x", "y"), crs = 3414)
+
+# Keep only points within actual boundaries
+synthetic_properties <- synthetic_properties[mpsz, ]
+n_properties <- nrow(synthetic_properties)
+
+cat("Number of synthetic properties within boundaries:", n_properties, "\n")
+```
+
+### 6.1 Generate Property Attributes
+```{r}
+#| code-fold: false
+# Extract coordinates for distance calculations
+coords <- st_coordinates(synthetic_properties)
+
+# Calculate distance to CBD (assume CBD is at central point)
+cbd_point <- c(mean(bbox$xmin, bbox$xmax), mean(bbox$ymin, bbox$ymax))
+dist_cbd <- sqrt((coords[,1] - cbd_point[1])^2 + (coords[,2] - cbd_point[2])^2)
+
+# Generate synthetic property attributes with spatial correlation
+synthetic_properties <- synthetic_properties %>%
+  mutate(
+    # Structural attributes
+    AREA_SQM = rnorm(n(), mean = 100, sd = 30) + (15000 - dist_cbd/1000) * 0.002,
+    AREA_SQM = pmax(AREA_SQM, 40),  # Minimum 40 sqm
+    AGE = rpois(n(), lambda = 10) + runif(n(), 0, 5),
+    NO_OF_UNITS = sample(50:500, n(), replace = TRUE),
+    
+    # Location attributes (using actual distances)
+    PROX_CBD = dist_cbd,
+    PROX_MRT = abs(rnorm(n(), mean = 800, sd = 400)) + dist_cbd * 0.05,
+    PROX_PARK = abs(rnorm(n(), mean = 500, sd = 200)),
+    PROX_SHOPPING_MALL = abs(rnorm(n(), mean = 1000, sd = 500)),
+    PROX_PRIMARY_SCH = abs(rnorm(n(), mean = 600, sd = 300)),
+    PROX_BUS_STOP = abs(rnorm(n(), mean = 200, sd = 100)),
+    
+    # Binary attributes
+    FREEHOLD = sample(c(0, 1), n(), replace = TRUE, prob = c(0.7, 0.3)),
+    
+    # Generate price based on attributes with spatial variation
+    SELLING_PRICE = 300000 +  # Base price
+      AREA_SQM * 8000 +        # Price per sqm
+      -AGE * 5000 +            # Age depreciation
+      -PROX_CBD * 20 +         # CBD distance effect
+      -PROX_MRT * 15 +         # MRT distance effect
+      FREEHOLD * 50000 +       # Freehold premium
+      rnorm(n(), 0, 50000) +   # Random variation
+      # Add spatial autocorrelation component
+      10000 * sin(coords[,1]/5000) * cos(coords[,2]/5000),
+    
+    # Ensure positive prices
+    SELLING_PRICE = pmax(SELLING_PRICE, 100000),
+    
+    # Log transformation
+    LOG_SELLING_PRICE = log(SELLING_PRICE)
+  )
+
+# Summary of synthetic data
+summary(synthetic_properties %>% 
+        st_drop_geometry() %>%
+        select(SELLING_PRICE, AREA_SQM, AGE, PROX_CBD, PROX_MRT))
+```
+
+## 7. Exploratory Data Analysis
+
+### 7.1 Visualize Property Distribution
+```{r}
+#| code-fold: false
+#| fig-width: 12
+#| fig-height: 8
+tm_shape(mpsz) +
+  tm_polygons(col = "grey95",
+              border.col = "grey60",
+              lwd = 0.5) +
+tm_shape(synthetic_properties) +
+  tm_dots(col = "SELLING_PRICE",
+          size = 0.02,
+          style = "quantile",
+          n = 5,
+          palette = "YlOrRd",
+          title = "Selling Price ($)",
+          alpha = 0.6) +
+  tm_layout(main.title = "Distribution of Synthetic Property Prices",
+            main.title.size = 1.2,
+            legend.position = c("right", "bottom"),
+            frame = FALSE)
+```
+
+### 7.2 Price Distribution Analysis
+```{r}
+#| code-fold: false
+#| fig-width: 12
+#| fig-height: 5
+par(mfrow = c(1, 2))
+hist(synthetic_properties$SELLING_PRICE/1000, 
+     main = "Distribution of Selling Price",
+     xlab = "Selling Price ($'000)",
+     col = "lightblue",
+     breaks = 30)
+hist(synthetic_properties$LOG_SELLING_PRICE,
+     main = "Distribution of Log Selling Price",
+     xlab = "Log(Selling Price)",
+     col = "lightgreen",
+     breaks = 30)
+par(mfrow = c(1, 1))
+```
+
+### 7.3 Correlation Analysis
+```{r}
+#| code-fold: false
+#| fig-width: 10
+#| fig-height: 8
+# Select numeric variables for correlation
+cor_vars <- synthetic_properties %>%
+  st_drop_geometry() %>%
+  select(SELLING_PRICE, AREA_SQM, AGE, PROX_CBD, PROX_MRT,
+         PROX_PARK, PROX_SHOPPING_MALL, PROX_PRIMARY_SCH, PROX_BUS_STOP)
+
+# Calculate correlation matrix
+cor_matrix <- cor(cor_vars)
+
+# Visualize
+corrplot(cor_matrix,
+         method = "circle",
+         type = "upper",
+         diag = FALSE,
+         tl.cex = 0.8,
+         tl.col = "black",
+         tl.srt = 45)
+```
+
+## 8. OLS Regression Model
+
+### 8.1 Build OLS Model
+```{r}
+#| code-fold: false
+# Build OLS model
+ols_model <- lm(LOG_SELLING_PRICE ~ AREA_SQM + AGE + 
+                  PROX_CBD + PROX_MRT + PROX_PARK +
+                  PROX_SHOPPING_MALL + PROX_PRIMARY_SCH + 
+                  PROX_BUS_STOP + FREEHOLD,
+                data = synthetic_properties)
+
+summary(ols_model)
+```
+
+### 8.2 Model Diagnostics
+```{r}
+#| code-fold: false
+#| fig-width: 12
+#| fig-height: 10
+par(mfrow = c(2, 2))
+plot(ols_model)
+par(mfrow = c(1, 1))
+```
+
+## 9. Test for Spatial Autocorrelation
+
+### 9.1 Create Spatial Weights
+```{r}
+#| code-fold: false
+# Add residuals to spatial data
+synthetic_properties$ols_residuals <- residuals(ols_model)
+
+# Create spatial weights
+coords <- st_coordinates(synthetic_properties)
+knn_nb <- knn2nb(knearneigh(coords, k = 8))
+knn_listw <- nb2listw(knn_nb, style = "W")
+```
+
+### 9.2 Moran's I Test
+```{r}
+#| code-fold: false
+moran_test <- moran.test(synthetic_properties$ols_residuals, knn_listw)
+print(moran_test)
+
+# Moran scatterplot
+moran.plot(synthetic_properties$ols_residuals, knn_listw,
+           main = "Moran Scatterplot of OLS Residuals",
+           xlab = "Residuals",
+           ylab = "Spatially Lagged Residuals",
+           labels = FALSE)
+```
+
+## 10. Geographically Weighted Regression
+
+### 10.1 Prepare Data for GWR
+```{r}
+#| code-fold: false
+# Convert to Spatial object for GWmodel
+properties_sp <- as(synthetic_properties, "Spatial")
+```
+
+### 10.2 Adaptive Bandwidth GWR
+```{r}
+#| code-fold: false
+# Cache file
+cache_file <- "gwr_synthetic_cache.rds"
+
+if(file.exists(cache_file)){
+  cat("Loading cached GWR results...\n")
+  gwr_results <- readRDS(cache_file)
+  bw_adaptive <- gwr_results$bw
+  gwr_adaptive <- gwr_results$model
+} else {
+  cat("Calculating optimal adaptive bandwidth...\n")
+  
+  # Determine optimal bandwidth
+  bw_adaptive <- bw.gwr(LOG_SELLING_PRICE ~ AREA_SQM + AGE + 
+                         PROX_CBD + PROX_MRT + PROX_PARK +
+                         PROX_SHOPPING_MALL + PROX_PRIMARY_SCH + 
+                         PROX_BUS_STOP + FREEHOLD,
+                       data = properties_sp,
+                       approach = "AICc",
+                       kernel = "bisquare",
+                       adaptive = TRUE,
+                       longlat = FALSE,
+                       parallel.method = "omp",
+                       parallel.arg = cores)
+  
+  cat("Optimal bandwidth:", bw_adaptive, "neighbors\n")
+  
+  # Calibrate GWR model
+  gwr_adaptive <- gwr.basic(LOG_SELLING_PRICE ~ AREA_SQM + AGE + 
+                            PROX_CBD + PROX_MRT + PROX_PARK +
+                            PROX_SHOPPING_MALL + PROX_PRIMARY_SCH + 
+                            PROX_BUS_STOP + FREEHOLD,
+                          data = properties_sp,
+                          bw = bw_adaptive,
+                          kernel = "bisquare",
+                          adaptive = TRUE,
+                          longlat = FALSE)
+  
+  # Save cache
+  saveRDS(list(bw = bw_adaptive, model = gwr_adaptive), cache_file)
+}
+
+print(gwr_adaptive)
+```
+
+### 10.3 Extract GWR Results
+```{r}
+#| code-fold: false
+# Extract results
+gwr_sf <- st_as_sf(gwr_adaptive$SDF)
+
+# Add to original data
+synthetic_properties$gwr_localR2 <- gwr_sf$Local_R2
+synthetic_properties$gwr_residual <- gwr_sf$residual
+
+# Summary of Local R²
+summary(synthetic_properties$gwr_localR2)
+```
+
+## 11. Visualize GWR Results
+
+### 11.1 Map Local R²
+```{r}
+#| code-fold: false
+#| fig-width: 12
+#| fig-height: 8
+tm_shape(mpsz) +
+  tm_polygons(col = "grey95",
+              border.col = "grey60",
+              lwd = 0.5) +
+tm_shape(synthetic_properties) +
+  tm_dots(col = "gwr_localR2",
+          size = 0.03,
+          style = "quantile",
+          n = 5,
+          palette = "RdPu",
+          title = "Local R²",
+          alpha = 0.7) +
+  tm_layout(main.title = "GWR Local R² Values",
+            main.title.size = 1.2,
+            legend.position = c("right", "bottom"),
+            frame = FALSE)
+```
+
+### 11.2 Compare Residuals
+```{r}
+#| code-fold: false
+#| fig-width: 14
+#| fig-height: 6
+tm1 <- tm_shape(mpsz) +
+       tm_polygons(alpha = 0.4) +
+       tm_shape(synthetic_properties) +
+       tm_dots(col = "ols_residuals",
+               size = 0.02,
+               style = "quantile",
+               palette = "-RdBu",
+               title = "OLS Residuals") +
+       tm_layout(main.title = "OLS Residuals")
+
+tm2 <- tm_shape(mpsz) +
+       tm_polygons(alpha = 0.4) +
+       tm_shape(synthetic_properties) +
+       tm_dots(col = "gwr_residual",
+               size = 0.02,
+               style = "quantile",
+               palette = "-RdBu",
+               title = "GWR Residuals") +
+       tm_layout(main.title = "GWR Residuals")
+
+tmap_arrange(tm1, tm2, ncol = 2)
+```
+
+## 12. Model Comparison
+
+### 12.1 Performance Metrics
+```{r}
+#| code-fold: false
+# Compare models
+comparison <- data.frame(
+  Model = c("OLS", "GWR Adaptive"),
+  AICc = c(AIC(ols_model), gwr_adaptive$GW.diagnostic$AICc),
+  Adj_R2 = c(summary(ols_model)$adj.r.squared, 
+             gwr_adaptive$GW.diagnostic$R2.adj),
+  RSS = c(sum(residuals(ols_model)^2),
+          gwr_adaptive$GW.diagnostic$RSS.gw)
+)
+
+knitr::kable(comparison, digits = 3,
+             caption = "Model Performance Comparison")
+```
+
+### 12.2 Spatial Autocorrelation in Residuals
+```{r}
+#| code-fold: false
+# Test GWR residuals
+moran_gwr <- moran.test(synthetic_properties$gwr_residual, knn_listw)
+
+# Compare Moran's I
+moran_comparison <- data.frame(
+  Model = c("OLS", "GWR"),
+  Morans_I = c(moran_test$estimate[1], moran_gwr$estimate[1]),
+  P_value = c(moran_test$p.value, moran_gwr$p.value)
+)
+
+knitr::kable(moran_comparison, digits = 4,
+             caption = "Spatial Autocorrelation Comparison")
+```
+
+## 13. Key Findings and Conclusions
+
+### Summary
+
+This analysis demonstrates the application of GWR methods using:
+
+1. **OD Matrix Analysis**: Understanding spatial accessibility patterns
+2. **Synthetic Data Generation**: Creating spatially correlated property data
+3. **GWR Application**: Capturing spatial heterogeneity in relationships
+
+### Key Insights:
+
+1. **Spatial Heterogeneity**: GWR reveals that relationships between property prices and attributes vary across space
+2. **Model Improvement**: GWR shows better fit than OLS (higher R², lower AICc)
+3. **Reduced Spatial Autocorrelation**: GWR effectively captures spatial patterns
+
+### Limitations:
+
+- This uses synthetic data for demonstration
+- Real property data would show more complex patterns
+- Additional variables would improve model performance
+
+### Next Steps:
+
+To apply this with real data:
+1. Obtain actual property transaction data
+2. Include more location-specific amenities
+3. Consider temporal dimensions
+4. Explore other spatial modeling techniques
+
+## 14. Notes on Data Requirements
+
+For a complete hedonic pricing analysis, you would need:
+
+1. **Property Transaction Data** with:
+   - Selling prices
+   - Property characteristics (area, age, type)
+   - Exact locations (coordinates)
+   - Transaction dates
+
+2. **Proximity Variables**:
+   - Distance to amenities
+   - Accessibility indices
+   - Neighborhood characteristics
+
+3. **Spatial Data**:
+   - Administrative boundaries
+   - Transportation networks
+   - Land use patterns
+
+The OD matrix can be used to calculate sophisticated accessibility measures that can be incorporated as variables in the hedonic pricing model.

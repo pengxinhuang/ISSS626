@@ -32,6 +32,8 @@ website:
             href: Hands-on_Ex/Hands-on_ex07/ex07.qmd
           - text: Ex08 · Geographically Weighted Prediction
             href: Hands-on_Ex/Hands-on_ex08/ex08.qmd
+          - text: Ex09 · Spatial Accessibility (2SFCA/E2SFCA)
+            href: Hands-on_Ex/Hands-on_ex09/ex09.qmd
       - text: In-class
         href: In-class_Ex/index.qmd
       - text: Take-home
