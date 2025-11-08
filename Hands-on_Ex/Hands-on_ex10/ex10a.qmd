@@ -1,0 +1,911 @@
+---
+title: "Hands-on Exercise 10a: Aspatial Spatial Interaction Models"
+author: "Huang Pengxin"
+date: "2025-01-08"
+date-modified: "last-modified"
+format:
+  html:
+    self-contained: false
+    toc: true
+    toc-depth: 3
+    code-fold: true
+    code-summary: "Show code"
+    number-sections: true
+execute:
+  eval: true
+  echo: true
+  warning: false
+  freeze: true
+  cache: true
+---
+
+# Overview
+
+## Introduction
+
+Spatial Interaction Models (SIMs) are mathematical models for predicting flows between spatial entities. This hands-on exercise demonstrates the calibration of spatial interaction models using aspatial methods, following the gravity model framework.
+
+## Learning Objectives
+
+By the end of this exercise, you will be able to:
+
+- Build and prepare Origin-Destination (OD) flow data from scratch
+- Calibrate unconstrained, singly-constrained, and doubly-constrained spatial interaction models
+- Interpret distance decay effects and model parameters
+- Compare model performance using appropriate metrics
+- Visualize interaction patterns and flow maps
+
+## The Data
+
+We will use:
+- Planning subzone boundaries (MP14_SUBZONE_NO_SEA_PL)
+- Synthetic OD flow data (generated based on spatial principles)
+- Population and employment attributes (synthetic but realistic)
+
+# Getting Started
+
+## Loading Required Packages
+```{r}
+#| code-fold: false
+pacman::p_load(tidyverse, sf, spdep, sp, tmap,
+               performance, reshape2, knitr,
+               ggpubr, corrplot, plotly,
+               DT, broom)
+```
+
+## Setting Up Environment
+```{r}
+#| code-fold: false
+# Set tmap mode
+tmap_mode("plot")
+
+# Set seed for reproducibility
+set.seed(1234)
+
+# Set number formatting
+options(scipen = 999)
+options(digits = 4)
+```
+
+# Data Import and Preparation
+
+## Load Geospatial Data
+```{r}
+#| code-fold: false
+# Load planning subzones from local file
+mpsz <- st_read(dsn = "data/geospatial",
+                layer = "MP14_SUBZONE_NO_SEA_PL",
+                quiet = TRUE) %>%
+  st_transform(crs = 3414)
+
+# Check the data
+cat("Number of planning subzones:", nrow(mpsz), "\n")
+cat("CRS:", st_crs(mpsz)$input, "\n")
+glimpse(mpsz)
+
+# Display first few records
+head(mpsz, 3)
+```
+
+## Generate Population and Employment Data
+```{r}
+#| code-fold: false
+# Generate synthetic population data for each subzone
+set.seed(1234)
+n_zones <- nrow(mpsz)
+zone_names <- mpsz$SUBZONE_C
+
+# Create population by age groups
+pop_data <- data.frame(
+  SUBZONE_C = zone_names,
+  TOTAL_POP = round(runif(n_zones, 1000, 50000)),
+  AGE7_12 = round(runif(n_zones, 100, 5000)),    # School age
+  AGE13_24 = round(runif(n_zones, 200, 8000)),   # Young adults
+  AGE25_64 = round(runif(n_zones, 500, 30000))   # Working age
+) %>%
+  mutate(
+    # Ensure age groups sum to less than total
+    AGE7_12 = pmin(AGE7_12, TOTAL_POP * 0.15),
+    AGE13_24 = pmin(AGE13_24, TOTAL_POP * 0.20),
+    AGE25_64 = pmin(AGE25_64, TOTAL_POP * 0.60)
+  )
+
+# Add employment data (correlated with working age population)
+pop_data <- pop_data %>%
+  mutate(
+    EMPLOYMENT = round(AGE25_64 * runif(n_zones, 0.3, 0.7))
+  )
+
+# Display summary
+summary(pop_data[, c("TOTAL_POP", "AGE25_64", "EMPLOYMENT")])
+```
+
+## Calculate Distance Matrix
+```{r}
+#| code-fold: false
+# Calculate centroids
+centroids <- st_centroid(mpsz)
+
+# Calculate distance matrix
+dist_matrix <- st_distance(centroids, centroids)
+dist_matrix <- as.matrix(dist_matrix)
+
+# Set row and column names
+rownames(dist_matrix) <- zone_names
+colnames(dist_matrix) <- zone_names
+
+cat("Distance matrix dimensions:", dim(dist_matrix), "\n")
+cat("Distance range (m):", range(dist_matrix), "\n")
+
+# Convert to long format
+dist_df <- as.data.frame(as.table(dist_matrix))
+names(dist_df) <- c("ORIGIN_SZ", "DESTIN_SZ", "dist")
+
+# Remove intra-zonal flows
+dist_df <- dist_df %>%
+  filter(ORIGIN_SZ != DESTIN_SZ)
+
+head(dist_df)
+```
+
+## Generate OD Flow Data
+```{r}
+#| code-fold: false
+# Generate realistic OD flows based on gravity model principles
+set.seed(1234)
+
+# Merge distance with population data
+od_base <- dist_df %>%
+  mutate(dist = as.numeric(dist)) %>%  # 转换为数值，去除单位
+  left_join(pop_data %>% select(SUBZONE_C, ORIG_POP = AGE25_64, ORIG_EMP = EMPLOYMENT),
+            by = c("ORIGIN_SZ" = "SUBZONE_C")) %>%
+  left_join(pop_data %>% select(SUBZONE_C, DEST_POP = AGE25_64, DEST_EMP = EMPLOYMENT),
+            by = c("DESTIN_SZ" = "SUBZONE_C"))
+
+# Generate flows using gravity model with noise
+od_flows <- od_base %>%
+  mutate(
+    # Basic gravity model: Flow = k * (Pop_i * Emp_j) / distance^beta
+    expected_flow = 0.01 * (ORIG_POP * DEST_EMP) / (dist^1.5),
+    # Add random variation
+    TRIPS = pmax(0, round(expected_flow * exp(rnorm(n(), 0, 0.5))))
+  ) %>%
+  select(ORIGIN_SZ, DESTIN_SZ, dist, TRIPS)
+
+# Summary of generated flows
+cat("\nGenerated OD flows summary:\n")
+cat("Total OD pairs:", nrow(od_flows), "\n")
+cat("Total trips:", sum(od_flows$TRIPS), "\n")
+cat("Zero flows:", sum(od_flows$TRIPS == 0), 
+    "(", round(sum(od_flows$TRIPS == 0)/nrow(od_flows)*100, 2), "%)\n")
+
+summary(od_flows$TRIPS)
+```
+
+## Create Complete SIM_data
+```{r}
+#| code-fold: false
+# Create the complete SIM_data dataset - OPTIMIZED VERSION
+
+# 1) Prepare attributes WITHOUT geometry (much faster!)
+orig_attr <- pop_data %>%
+  select(SUBZONE_C, 
+         ORIGIN_AGE7_12 = AGE7_12,
+         ORIGIN_AGE13_24 = AGE13_24,
+         ORIGIN_AGE25_64 = AGE25_64) %>%
+  distinct(SUBZONE_C, .keep_all = TRUE)
+
+dest_attr <- pop_data %>%
+  select(SUBZONE_C,
+         DESTIN_AGE7_12 = AGE7_12,
+         DESTIN_AGE13_24 = AGE13_24,
+         DESTIN_AGE25_64 = AGE25_64) %>%
+  distinct(SUBZONE_C, .keep_all = TRUE)
+
+# 2) Ensure character keys for consistent joining (check type first)
+od_flows <- od_flows %>%
+  mutate(ORIGIN_SZ = as.character(ORIGIN_SZ),
+         DESTIN_SZ = as.character(DESTIN_SZ))
+
+# Only convert if not already character
+if (!is.character(orig_attr$SUBZONE_C)) {
+  orig_attr <- orig_attr %>%
+    mutate(SUBZONE_C = as.character(SUBZONE_C))
+}
+
+if (!is.character(dest_attr$SUBZONE_C)) {
+  dest_attr <- dest_attr %>%
+    mutate(SUBZONE_C = as.character(SUBZONE_C))
+}
+
+# 3) Clean memory before big joins
+gc()
+
+# 4) Join without geometry - MUCH FASTER!
+SIM_data <- od_flows %>%
+  left_join(orig_attr, by = c("ORIGIN_SZ" = "SUBZONE_C")) %>%
+  left_join(dest_attr, by = c("DESTIN_SZ" = "SUBZONE_C"))
+
+# 5) Handle potential zeros for log transformations
+age_columns <- c("ORIGIN_AGE7_12", "ORIGIN_AGE13_24", "ORIGIN_AGE25_64",
+                 "DESTIN_AGE7_12", "DESTIN_AGE13_24", "DESTIN_AGE25_64")
+
+for (col in age_columns) {
+  if (col %in% names(SIM_data)) {
+    SIM_data[[col]] <- ifelse(is.na(SIM_data[[col]]) | SIM_data[[col]] == 0, 
+                              0.99, 
+                              SIM_data[[col]])
+  }
+}
+
+# 6) Verify the dataset
+stopifnot(all(c("ORIGIN_SZ", "DESTIN_SZ", "TRIPS", "dist") %in% names(SIM_data)))
+
+# Check the final dataset
+glimpse(SIM_data)
+cat("\nFinal SIM_data dimensions:", dim(SIM_data), "\n")
+cat("Missing values in dist:", sum(is.na(SIM_data$dist)), "\n")
+cat("Zero trips:", sum(SIM_data$TRIPS == 0), "\n")
+
+# 7) Create directory if it doesn't exist and save
+if (!dir.exists("data/rds")) {
+  dir.create("data/rds", recursive = TRUE, showWarnings = FALSE)
+  cat("Created directory: data/rds\n")
+}
+
+# Save the data
+write_rds(SIM_data, "data/rds/SIM_data.rds")
+cat("\nSIM_data successfully saved to data/rds/SIM_data.rds for use in Exercise 10b\n")
+
+# Verify file was saved
+if (file.exists("data/rds/SIM_data.rds")) {
+  file_size <- file.size("data/rds/SIM_data.rds") / 1024 / 1024  # Convert to MB
+  cat("File size:", round(file_size, 2), "MB\n")
+} else {
+  cat("Warning: File was not saved successfully!\n")
+}
+```
+
+# Exploratory Data Analysis
+
+## Flow Distribution
+```{r}
+#| code-fold: false
+#| fig-width: 12
+#| fig-height: 5
+# Distribution of flows
+p1 <- ggplot(data = SIM_data,
+             aes(x = TRIPS)) +
+  geom_histogram(bins = 50,
+                 fill = "lightblue",
+                 color = "black") +
+  labs(title = "Distribution of Trips",
+       x = "Number of Trips",
+       y = "Frequency") +
+  theme_minimal()
+
+p2 <- ggplot(data = SIM_data %>% filter(TRIPS > 0),
+             aes(x = log(TRIPS + 1))) +
+  geom_histogram(bins = 50,
+                 fill = "lightgreen",
+                 color = "black") +
+  labs(title = "Distribution of Log(Trips + 1)",
+       x = "Log(Number of Trips + 1)",
+       y = "Frequency") +
+  theme_minimal()
+
+ggarrange(p1, p2, ncol = 2)
+
+# Statistics
+cat("\nFlow Statistics:\n")
+summary(SIM_data$TRIPS)
+cat("Percentage of zero flows:", 
+    round(sum(SIM_data$TRIPS == 0)/nrow(SIM_data)*100, 2), "%\n")
+```
+
+## Distance Decay Effect
+```{r}
+#| code-fold: false
+#| fig-width: 10
+#| fig-height: 6
+
+# Filter and sample data for visualization (use sample for smooth calculation)
+SIM_data_positive <- SIM_data %>% 
+  filter(TRIPS > 0)
+
+# For smooth line, use a sample to speed up calculation
+SIM_data_sample <- SIM_data_positive %>%
+  sample_n(min(1000, nrow(SIM_data_positive)))
+
+# Distance decay plot - optimized version
+ggplot() +
+  # All points with transparency
+  geom_point(data = SIM_data_positive,
+             aes(x = dist/1000, y = TRIPS),
+             alpha = 0.1, size = 0.5, color = "darkblue") +
+  # Smooth line using sample only
+  geom_smooth(data = SIM_data_sample,
+              aes(x = dist/1000, y = TRIPS),
+              method = "loess", color = "red", se = TRUE) +
+  scale_y_log10() +
+  scale_x_continuous(breaks = seq(0, 50, 10)) +
+  labs(title = "Distance Decay Effect on Trips",
+       subtitle = paste("Based on", nrow(SIM_data_positive), "positive flows"),
+       x = "Distance (km)",
+       y = "Number of Trips (log scale)") +
+  theme_minimal()
+
+# Correlation
+cor_test <- cor.test(SIM_data$dist, SIM_data$TRIPS)
+cat("\nCorrelation between distance and flow:", 
+    round(cor_test$estimate, 3), "\n")
+```
+
+## Top Origin-Destination Pairs
+```{r}
+#| code-fold: false
+# Top 15 OD pairs
+top_flows <- SIM_data %>%
+  arrange(desc(TRIPS)) %>%
+  head(15) %>%
+  select(ORIGIN_SZ, DESTIN_SZ, TRIPS, dist, ORIGIN_AGE25_64, DESTIN_AGE25_64)
+
+kable(top_flows,
+      col.names = c("Origin", "Destination", "Trips", 
+                    "Distance(m)", "Origin Working Age", "Dest Working Age"),
+      caption = "Top 15 Origin-Destination Pairs by Trip Volume",
+      digits = 0)
+```
+
+## Correlation Analysis
+```{r}
+#| code-fold: false
+#| fig-width: 10
+#| fig-height: 8
+# Select variables for correlation
+cor_data <- SIM_data %>%
+  select(TRIPS, dist, 
+         ORIGIN_AGE7_12, ORIGIN_AGE13_24, ORIGIN_AGE25_64,
+         DESTIN_AGE7_12, DESTIN_AGE13_24, DESTIN_AGE25_64) %>%
+  rename("Trips" = TRIPS,
+         "Distance" = dist,
+         "O_School" = ORIGIN_AGE7_12,
+         "O_Young" = ORIGIN_AGE13_24,
+         "O_Work" = ORIGIN_AGE25_64,
+         "D_School" = DESTIN_AGE7_12,
+         "D_Young" = DESTIN_AGE13_24,
+         "D_Work" = DESTIN_AGE25_64)
+
+# Correlation matrix
+cor_matrix <- cor(cor_data, use = "complete.obs")
+
+# Visualize
+corrplot(cor_matrix,
+         method = "color",
+         type = "upper",
+         order = "hclust",
+         tl.cex = 0.8,
+         tl.col = "black",
+         addCoef.col = "black",
+         number.cex = 0.6)
+```
+
+# Calibrating Spatial Interaction Models
+
+## Prepare Modeling Data
+```{r}
+#| code-fold: false
+# Remove flows with zero or missing values for log transformation
+SIM_data_model <- SIM_data %>%
+  filter(TRIPS > 0,
+         dist > 0,
+         ORIGIN_AGE25_64 > 0,
+         DESTIN_AGE25_64 > 0) %>%
+  mutate(
+    log_TRIPS = log(TRIPS),
+    log_DIST = log(dist),
+    log_ORIG_WORK = log(ORIGIN_AGE25_64),
+    log_DEST_WORK = log(DESTIN_AGE25_64)
+  )
+
+cat("Number of observations for modeling:", nrow(SIM_data_model), "\n")
+cat("Percentage of data retained:", 
+    round(nrow(SIM_data_model)/nrow(SIM_data)*100, 2), "%\n")
+```
+
+## Unconstrained Model
+
+### Basic Gravity Model
+```{r}
+#| code-fold: false
+# Unconstrained gravity model
+uncSIM <- lm(log_TRIPS ~ log_ORIG_WORK + log_DEST_WORK + log_DIST,
+             data = SIM_data_model)
+
+summary(uncSIM)
+
+# Extract parameters
+beta_dist <- -coef(uncSIM)["log_DIST"]
+cat("\nDistance decay parameter (β):", round(beta_dist, 3), "\n")
+cat("Interpretation: 1% increase in distance reduces flow by", 
+    round(beta_dist, 2), "%\n")
+```
+
+### Model Diagnostics
+```{r}
+#| code-fold: false
+#| fig-width: 12
+#| fig-height: 10
+# Diagnostic plots
+par(mfrow = c(2, 2))
+plot(uncSIM)
+par(mfrow = c(1, 1))
+
+# Performance metrics
+cat("\nModel Performance:\n")
+cat("R-squared:", round(summary(uncSIM)$r.squared, 4), "\n")
+cat("Adjusted R-squared:", round(summary(uncSIM)$adj.r.squared, 4), "\n")
+cat("AIC:", round(AIC(uncSIM), 2), "\n")
+cat("BIC:", round(BIC(uncSIM), 2), "\n")
+```
+
+## Origin-Constrained Model
+```{r}
+#| code-fold: false
+# Origin-constrained model with fixed effects
+orcSIM <- lm(log_TRIPS ~ ORIGIN_SZ + log_DEST_WORK + log_DIST,
+             data = SIM_data_model)
+
+# Display non-fixed effect coefficients
+coef_summary <- summary(orcSIM)$coefficients
+non_fe_coefs <- coef_summary[c("log_DEST_WORK", "log_DIST"), ]
+print(non_fe_coefs)
+
+# Model performance
+cat("\nOrigin-Constrained Model Performance:\n")
+cat("R-squared:", round(summary(orcSIM)$r.squared, 4), "\n")
+cat("Adjusted R-squared:", round(summary(orcSIM)$adj.r.squared, 4), "\n")
+cat("AIC:", round(AIC(orcSIM), 2), "\n")
+```
+
+## Destination-Constrained Model
+```{r}
+#| code-fold: false
+# Destination-constrained model
+decSIM <- lm(log_TRIPS ~ DESTIN_SZ + log_ORIG_WORK + log_DIST,
+             data = SIM_data_model)
+
+# Display non-fixed effect coefficients
+coef_summary_dec <- summary(decSIM)$coefficients
+non_fe_coefs_dec <- coef_summary_dec[c("log_ORIG_WORK", "log_DIST"), ]
+print(non_fe_coefs_dec)
+
+# Model performance
+cat("\nDestination-Constrained Model Performance:\n")
+cat("R-squared:", round(summary(decSIM)$r.squared, 4), "\n")
+cat("Adjusted R-squared:", round(summary(decSIM)$adj.r.squared, 4), "\n")
+cat("AIC:", round(AIC(decSIM), 2), "\n")
+```
+
+## Doubly-Constrained Model
+```{r}
+#| code-fold: false
+# Doubly-constrained model
+dbcSIM <- lm(log_TRIPS ~ ORIGIN_SZ + DESTIN_SZ + log_DIST,
+             data = SIM_data_model)
+
+# Extract distance coefficient
+distance_coef <- coef(dbcSIM)["log_DIST"]
+cat("Distance decay parameter (β):", round(-distance_coef, 3), "\n")
+cat("Standard error:", round(summary(dbcSIM)$coefficients["log_DIST", 2], 4), "\n")
+cat("t-value:", round(summary(dbcSIM)$coefficients["log_DIST", 3], 2), "\n")
+
+# Model performance
+cat("\nDoubly-Constrained Model Performance:\n")
+cat("R-squared:", round(summary(dbcSIM)$r.squared, 4), "\n")
+cat("Adjusted R-squared:", round(summary(dbcSIM)$adj.r.squared, 4), "\n")
+cat("AIC:", round(AIC(dbcSIM), 2), "\n")
+```
+
+## Enhanced Model with Multiple Age Groups
+```{r}
+#| code-fold: false
+# Add multiple age group variables
+attSIM <- lm(log_TRIPS ~ log_ORIG_WORK + log_DEST_WORK + log_DIST +
+             log(ORIGIN_AGE13_24 + 1) + log(DESTIN_AGE13_24 + 1) +
+             log(ORIGIN_AGE7_12 + 1) + log(DESTIN_AGE7_12 + 1),
+             data = SIM_data_model)
+
+summary(attSIM)
+
+# Model performance
+cat("\nEnhanced Model Performance:\n")
+cat("R-squared:", round(summary(attSIM)$r.squared, 4), "\n")
+cat("Adjusted R-squared:", round(summary(attSIM)$adj.r.squared, 4), "\n")
+cat("AIC:", round(AIC(attSIM), 2), "\n")
+```
+
+# Model Comparison
+
+## Performance Metrics Comparison
+```{r}
+#| code-fold: false
+# Create comparison table
+model_comparison <- data.frame(
+  Model = c("Unconstrained", "Origin-Constrained", 
+            "Destination-Constrained", "Doubly-Constrained",
+            "Enhanced"),
+  R2 = c(summary(uncSIM)$r.squared,
+         summary(orcSIM)$r.squared,
+         summary(decSIM)$r.squared,
+         summary(dbcSIM)$r.squared,
+         summary(attSIM)$r.squared),
+  Adj_R2 = c(summary(uncSIM)$adj.r.squared,
+             summary(orcSIM)$adj.r.squared,
+             summary(decSIM)$adj.r.squared,
+             summary(dbcSIM)$adj.r.squared,
+             summary(attSIM)$adj.r.squared),
+  AIC = c(AIC(uncSIM), AIC(orcSIM), AIC(decSIM), 
+          AIC(dbcSIM), AIC(attSIM)),
+  BIC = c(BIC(uncSIM), BIC(orcSIM), BIC(decSIM), 
+          BIC(dbcSIM), BIC(attSIM))
+) %>%
+  arrange(desc(R2))
+
+kable(model_comparison,
+      digits = 4,
+      caption = "Model Performance Comparison")
+
+# Visualize comparison
+model_comp_long <- model_comparison %>%
+  select(Model, R2, Adj_R2) %>%
+  pivot_longer(cols = c(R2, Adj_R2),
+               names_to = "Metric",
+               values_to = "Value")
+
+ggplot(model_comp_long,
+       aes(x = reorder(Model, Value), y = Value, fill = Metric)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  coord_flip() +
+  labs(title = "Model Performance Comparison",
+       x = "Model",
+       y = "R-squared Value") +
+  theme_minimal() +
+  scale_fill_brewer(palette = "Set2")
+```
+
+## Residual Analysis
+```{r}
+#| code-fold: false
+#| fig-width: 14
+#| fig-height: 10
+# Prepare residuals
+models <- list(
+  "Unconstrained" = uncSIM,
+  "Origin-Constrained" = orcSIM,
+  "Destination-Constrained" = decSIM,
+  "Doubly-Constrained" = dbcSIM
+)
+
+# Create residual plots
+par(mfrow = c(2, 2))
+for(name in names(models)) {
+  plot(fitted(models[[name]]), residuals(models[[name]]),
+       main = paste(name, "Model"),
+       xlab = "Fitted Values",
+       ylab = "Residuals",
+       pch = 20, col = rgb(0, 0, 1, 0.3))
+  abline(h = 0, col = "red", lty = 2)
+}
+par(mfrow = c(1, 1))
+```
+
+## Prediction Comparison
+```{r}
+#| code-fold: false
+#| fig-width: 12
+#| fig-height: 8
+# Compare predictions from unconstrained and doubly-constrained models
+SIM_data_model <- SIM_data_model %>%
+  mutate(
+    pred_unc = exp(fitted(uncSIM)),
+    pred_dbc = exp(fitted(dbcSIM)),
+    actual = TRIPS
+  )
+
+# Scatter plots
+p1 <- ggplot(SIM_data_model,
+             aes(x = actual, y = pred_unc)) +
+  geom_point(alpha = 0.3, size = 0.8, color = "blue") +
+  geom_abline(intercept = 0, slope = 1, color = "red", linetype = "dashed") +
+  scale_x_log10() +
+  scale_y_log10() +
+  labs(title = "Unconstrained Model",
+       x = "Actual Trips (log scale)",
+       y = "Predicted Trips (log scale)") +
+  theme_minimal()
+
+p2 <- ggplot(SIM_data_model,
+             aes(x = actual, y = pred_dbc)) +
+  geom_point(alpha = 0.3, size = 0.8, color = "green") +
+  geom_abline(intercept = 0, slope = 1, color = "red", linetype = "dashed") +
+  scale_x_log10() +
+  scale_y_log10() +
+  labs(title = "Doubly-Constrained Model",
+       x = "Actual Trips (log scale)",
+       y = "Predicted Trips (log scale)") +
+  theme_minimal()
+
+ggarrange(p1, p2, ncol = 2)
+
+# Calculate prediction metrics
+calc_metrics <- function(actual, predicted) {
+  rmse <- sqrt(mean((actual - predicted)^2))
+  mae <- mean(abs(actual - predicted))
+  mape <- mean(abs((actual - predicted) / actual)) * 100
+  return(c(RMSE = rmse, MAE = mae, MAPE = mape))
+}
+
+metrics_unc <- calc_metrics(SIM_data_model$actual, SIM_data_model$pred_unc)
+metrics_dbc <- calc_metrics(SIM_data_model$actual, SIM_data_model$pred_dbc)
+
+metrics_table <- data.frame(
+  Model = c("Unconstrained", "Doubly-Constrained"),
+  RMSE = c(metrics_unc["RMSE"], metrics_dbc["RMSE"]),
+  MAE = c(metrics_unc["MAE"], metrics_dbc["MAE"]),
+  MAPE = c(metrics_unc["MAPE"], metrics_dbc["MAPE"])
+)
+
+kable(metrics_table,
+      digits = 2,
+      caption = "Prediction Error Metrics")
+```
+
+# Visualization of Results
+
+## Flow Maps
+```{r}
+#| code-fold: false
+#| fig-width: 12
+#| fig-height: 10
+# Select top 50 flows for visualization
+top_flows <- SIM_data %>%
+  arrange(desc(TRIPS)) %>%
+  head(50)
+
+# Get coordinates for flow lines
+origin_coords <- centroids %>%
+  filter(SUBZONE_C %in% top_flows$ORIGIN_SZ) %>%
+  st_coordinates() %>%
+  as.data.frame() %>%
+  mutate(ORIGIN_SZ = centroids$SUBZONE_C[centroids$SUBZONE_C %in% top_flows$ORIGIN_SZ])
+
+dest_coords <- centroids %>%
+  filter(SUBZONE_C %in% top_flows$DESTIN_SZ) %>%
+  st_coordinates() %>%
+  as.data.frame() %>%
+  mutate(DESTIN_SZ = centroids$SUBZONE_C[centroids$SUBZONE_C %in% top_flows$DESTIN_SZ])
+
+# Create flow lines
+flow_lines <- top_flows %>%
+  left_join(origin_coords, by = "ORIGIN_SZ") %>%
+  rename(o_X = X, o_Y = Y) %>%
+  left_join(dest_coords, by = "DESTIN_SZ") %>%
+  rename(d_X = X, d_Y = Y)
+
+# Function to create line
+create_line <- function(row) {
+  if(!is.na(row$o_X) && !is.na(row$d_X)) {
+    coords <- matrix(c(row$o_X, row$o_Y, row$d_X, row$d_Y),
+                     ncol = 2, byrow = TRUE)
+    st_linestring(coords)
+  } else {
+    NULL
+  }
+}
+
+# Create sf object with lines
+flow_sf <- flow_lines %>%
+  filter(!is.na(o_X) & !is.na(d_X)) %>%
+  rowwise() %>%
+  mutate(geometry = list(create_line(cur_data()))) %>%
+  ungroup() %>%
+  st_as_sf() %>%
+  st_set_crs(3414)
+
+# Map
+tm_shape(mpsz) +
+  tm_polygons(col = "grey90",
+              border.col = "grey50",
+              lwd = 0.5) +
+tm_shape(flow_sf) +
+  tm_lines(col = "TRIPS",
+           lwd = "TRIPS",
+           scale = 5,
+           style = "quantile",
+           palette = "YlOrRd",
+           alpha = 0.6,
+           title.col = "Trip Volume",
+           title.lwd = "Flow Volume",
+           legend.lwd.show = FALSE) +
+  tm_layout(main.title = "Top 50 Origin-Destination Flows",
+            main.title.size = 1.2,
+            legend.position = c("right", "bottom"),
+            frame = FALSE)
+```
+
+## Distance Decay Curves
+```{r}
+#| code-fold: false
+#| fig-width: 10
+#| fig-height: 6
+# Extract distance decay parameters
+models_beta <- data.frame(
+  Model = c("Unconstrained", "Origin-Constrained", 
+            "Destination-Constrained", "Doubly-Constrained"),
+  Beta = c(-coef(uncSIM)["log_DIST"],
+           -coef(orcSIM)["log_DIST"],
+           -coef(decSIM)["log_DIST"],
+           -coef(dbcSIM)["log_DIST"])
+)
+
+# Create distance decay curves
+dist_seq <- seq(0.5, 50, by = 0.5)  # Distance in km
+decay_curves <- data.frame(Distance = dist_seq)
+
+for(i in 1:nrow(models_beta)) {
+  decay_curves[[models_beta$Model[i]]] <- exp(-models_beta$Beta[i] * log(dist_seq))
+}
+
+# Reshape for plotting
+decay_long <- decay_curves %>%
+  pivot_longer(cols = -Distance,
+               names_to = "Model",
+               values_to = "Interaction")
+
+# Plot
+ggplot(decay_long,
+       aes(x = Distance, y = Interaction, color = Model)) +
+  geom_line(size = 1.2) +
+  labs(title = "Distance Decay Functions by Model Type",
+       x = "Distance (km)",
+       y = "Relative Interaction Intensity") +
+  theme_minimal() +
+  scale_color_brewer(palette = "Set1") +
+  theme(legend.position = "bottom")
+```
+
+## Interactive Visualization
+```{r}
+#| code-fold: false
+#| fig-width: 10
+#| fig-height: 7
+# Create interactive plot
+library(plotly)
+
+# Sample data for performance
+plot_data <- SIM_data_model %>%
+  sample_n(min(1000, nrow(.)))
+
+p <- plot_ly(data = plot_data,
+             x = ~dist/1000,
+             y = ~TRIPS,
+             color = ~log(DESTIN_AGE25_64),
+             size = ~ORIGIN_AGE25_64,
+             text = ~paste("Origin:", ORIGIN_SZ,
+                          "<br>Destination:", DESTIN_SZ,
+                          "<br>Trips:", TRIPS,
+                          "<br>Distance:", round(dist/1000, 1), "km",
+                          "<br>Origin Working Pop:", ORIGIN_AGE25_64,
+                          "<br>Dest Working Pop:", DESTIN_AGE25_64),
+             type = 'scatter',
+             mode = 'markers',
+             marker = list(sizemode = 'diameter',
+                          opacity = 0.5),
+             hoverinfo = 'text') %>%
+  layout(title = "Interactive Flow Visualization",
+         xaxis = list(title = "Distance (km)",
+                     type = "log"),
+         yaxis = list(title = "Trips",
+                     type = "log"),
+         showlegend = FALSE)
+
+p
+```
+
+# Key Findings
+
+## Summary of Results
+```{r}
+#| code-fold: false
+# Extract key parameters from best models
+key_params <- data.frame(
+  Parameter = c("Distance Decay (Unconstrained)",
+                "Distance Decay (Doubly-Constrained)",
+                "Origin Working Pop Elasticity",
+                "Destination Working Pop Elasticity"),
+  Value = c(round(-coef(uncSIM)["log_DIST"], 3),
+            round(-coef(dbcSIM)["log_DIST"], 3),
+            round(coef(uncSIM)["log_ORIG_WORK"], 3),
+            round(coef(uncSIM)["log_DEST_WORK"], 3)),
+  Interpretation = c(
+    "1% increase in distance reduces flow by this %",
+    "Distance effect when controlling for zone sizes",
+    "1% increase in origin working pop increases flow by this %",
+    "1% increase in destination working pop increases flow by this %"
+  )
+)
+
+kable(key_params,
+      caption = "Key Model Parameters and Their Interpretations")
+```
+
+## Model Selection Guidance
+```{r}
+#| code-fold: false
+cat("Model Selection Recommendations:\n")
+cat(strrep("=", 50), "\n\n")  # 修正：使用 strrep 而不是 * 
+
+# Best model by criterion
+best_r2 <- model_comparison$Model[which.max(model_comparison$R2)]
+best_aic <- model_comparison$Model[which.min(model_comparison$AIC)]
+
+cat("1. Highest R-squared:", best_r2, 
+    "(R² =", round(max(model_comparison$R2), 3), ")\n")
+cat("2. Lowest AIC:", best_aic,
+    "(AIC =", round(min(model_comparison$AIC), 0), ")\n\n")
+
+cat("Practical Recommendations:\n")
+cat("- For understanding general patterns: Use Unconstrained Model\n")
+cat("- For trip generation studies: Use Origin-Constrained Model\n")
+cat("- For destination choice: Use Destination-Constrained Model\n")
+cat("- For fixed trip matrices: Use Doubly-Constrained Model\n")
+cat("- For policy analysis: Include demographic variables\n")
+```
+
+# Conclusions
+
+## Key Insights
+
+This analysis of spatial interaction models reveals:
+
+1. **Strong Distance Decay**: Distance is consistently the strongest predictor of interaction flows
+
+2. **Constraint Effects**: Adding constraints significantly improves model fit, with doubly-constrained models achieving the highest R²
+
+3. **Demographic Influences**: Working-age population is the key demographic driver of flows
+
+4. **Model Trade-offs**: 
+   - Unconstrained models: Most interpretable but lowest fit
+   - Constrained models: Better fit but less generalizable
+   - Enhanced models: Balance between fit and interpretability
+
+## Applications
+
+These models can inform:
+- **Transport Planning**: Predict traffic flows for new infrastructure
+- **Service Location**: Optimize facility placement
+- **Urban Development**: Understand and predict movement patterns
+- **Policy Analysis**: Evaluate impacts of demographic changes
+
+## Data Export for Exercise 10b
+```{r}
+#| code-fold: false
+# Ensure data is saved for next exercise
+cat("Data exported for Exercise 10b:\n")
+cat("- SIM_data saved to: data/rds/SIM_data.rds\n")
+cat("- Number of OD pairs:", nrow(SIM_data), "\n")
+cat("- Variables included:", paste(names(SIM_data), collapse = ", "), "\n")
+```
+
+## Next Steps
+
+In Exercise 10b, we will:
+- Account for spatial autocorrelation in flows
+- Apply spatial econometric models using the `spflow` package
+- Compare aspatial vs spatial model performance
+- Explore network effects and spatial spillovers
+
+---
+
+*End of Exercise 10a: Aspatial Spatial Interaction Models*

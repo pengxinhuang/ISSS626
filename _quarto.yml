@@ -34,6 +34,10 @@ website:
             href: Hands-on_Ex/Hands-on_ex08/ex08.qmd
           - text: Ex09 · Spatial Accessibility (2SFCA/E2SFCA)
             href: Hands-on_Ex/Hands-on_ex09/ex09.qmd
+          - text: Ex10a · Aspatial Spatial Interaction Models
+            href: Hands-on_Ex/Hands-on_ex10/ex10a.qmd      
+          - text: Ex10b · SIM Calibration (spflow)
+            href: Hands-on_Ex/Hands-on_ex10/ex10b.qmd      
       - text: In-class
         href: In-class_Ex/index.qmd
       - text: Take-home
@@ -44,10 +48,10 @@ format:
     theme: cosmo
     toc: true
     code-fold: true
-    self-contained: false   # ✅ 推荐补上这一行
+    self-contained: false   # 地图/plotly更稳，体积更小
 
 execute:
-  freeze: auto
-  cache: true               # ✅ 建议加上缓存
+  freeze: auto              # 只重跑改动页面
+  cache: true               # 代码块缓存，加速渲染
 
 editor: visual

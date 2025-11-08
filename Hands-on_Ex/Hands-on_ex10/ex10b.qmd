@@ -1,0 +1,747 @@
+---
+title: "Hands-on Exercise 10b: Spatial Spatial Interaction Models"
+author: "Huang Pengxin"
+date: "2025-01-08"
+date-modified: "last-modified"
+format:
+  html:
+    self-contained: false
+    toc: true
+    toc-depth: 3
+    code-fold: true
+    code-summary: "Show code"
+    number-sections: true
+execute:
+  eval: true
+  echo: true
+  warning: false
+  freeze: true
+  cache: true
+---
+
+# Overview
+
+## Introduction
+
+Building upon Exercise 10a's aspatial models, this exercise introduces spatial econometric approaches to spatial interaction modeling. We will use spatial regression methods to account for spatial autocorrelation and network effects in Origin-Destination flows.
+
+## Learning Objectives
+
+By the end of this exercise, you will be able to:
+
+- Understand spatial dependencies in OD flow data
+- Build spatial econometric interaction models
+- Account for origin, destination, and spatial effects
+- Compare spatial vs aspatial model performance
+- Interpret spatial spillover effects
+
+## Key Concepts
+
+**Why Spatial Models for Flows?**
+- Flows from nearby origins may be correlated (origin dependence)
+- Flows to nearby destinations may be correlated (destination dependence)  
+- Flows between nearby OD pairs may be correlated (network dependence)
+- Ignoring these dependencies leads to biased estimates
+
+# Getting Started
+
+## Loading Required Packages
+```{r}
+#| code-fold: false
+pacman::p_load(spatialreg, tidyverse, sf, spdep, 
+               tmap, Matrix, igraph, MASS,
+               knitr, ggpubr, corrplot)
+```
+
+## Setting Up Environment
+```{r}
+#| code-fold: false
+# Set tmap mode
+tmap_mode("plot")
+
+# Set seed for reproducibility
+set.seed(1234)
+
+# Set number formatting
+options(scipen = 999)
+options(digits = 4)
+```
+
+# Data Import and Preparation
+
+## Load Data from Exercise 10a
+```{r}
+#| code-fold: false
+# Load the SIM_data prepared in Exercise 10a
+SIM_data <- read_rds("data/rds/SIM_data.rds")
+
+cat("SIM_data loaded successfully!\n")
+cat("Dimensions:", dim(SIM_data), "\n")
+cat("Total flows:", sum(SIM_data$TRIPS), "\n")
+
+# Display structure
+glimpse(SIM_data)
+```
+
+## Load Spatial Data
+```{r}
+#| code-fold: false
+# Load planning subzones
+mpsz <- st_read(dsn = "data/geospatial",
+                layer = "MP14_SUBZONE_NO_SEA_PL",
+                quiet = TRUE) %>%
+  st_transform(crs = 3414)
+
+cat("Number of zones:", nrow(mpsz), "\n")
+
+# Get zone centroids for later use
+centroids <- st_centroid(mpsz)
+```
+
+## Prepare Zone Attributes
+```{r}
+#| code-fold: false
+# 明确使用dplyr的函数
+zones <- SIM_data %>%
+  dplyr::select(ORIGIN_SZ, ORIGIN_AGE7_12, ORIGIN_AGE13_24, ORIGIN_AGE25_64) %>%
+  dplyr::rename(
+    SUBZONE_C = ORIGIN_SZ,
+    AGE7_12 = ORIGIN_AGE7_12,
+    AGE13_24 = ORIGIN_AGE13_24, 
+    AGE25_64 = ORIGIN_AGE25_64
+  ) %>%
+  dplyr::distinct()
+
+# Join with spatial data
+zones_sf <- mpsz %>%
+  dplyr::select(SUBZONE_C, geometry) %>%
+  dplyr::left_join(zones, by = "SUBZONE_C") %>%
+  dplyr::filter(!is.na(AGE25_64))
+
+cat("Number of zones with data:", nrow(zones_sf), "\n")
+```
+
+# Creating Spatial Weights
+
+## Contiguity-Based Weights
+```{r}
+#| code-fold: false
+# Create contiguity weights (Queen)
+nb_queen <- poly2nb(zones_sf, queen = TRUE)
+summary(nb_queen)
+
+# Convert to listw object
+lw_queen <- nb2listw(nb_queen, style = "W", zero.policy = TRUE)
+
+# Visualize neighbor structure
+plot(st_geometry(zones_sf), border = "grey")
+plot(nb_queen, st_coordinates(st_centroid(zones_sf)), 
+     add = TRUE, col = "red", lwd = 0.5)
+title("Queen Contiguity Neighbors")
+```
+
+## Distance-Based Weights
+```{r}
+#| code-fold: false
+# K-nearest neighbors
+coords <- st_coordinates(st_centroid(zones_sf))
+knn8 <- knn2nb(knearneigh(coords, k = 8))
+lw_knn8 <- nb2listw(knn8, style = "W")
+
+# Distance threshold
+dist_threshold <- 5000  # 5km
+dnb <- dnearneigh(coords, 0, dist_threshold)
+lw_dist <- nb2listw(dnb, style = "W", zero.policy = TRUE)
+
+cat("Average number of neighbors:\n")
+cat("- Queen contiguity:", mean(card(nb_queen)), "\n")
+cat("- 8-NN:", mean(card(knn8)), "\n")
+cat("- Distance (5km):", mean(card(dnb)), "\n")
+```
+
+# Exploratory Spatial Data Analysis
+
+## Spatial Autocorrelation in Flows
+```{r}
+#| code-fold: false
+# Calculate total outflows and inflows per zone
+outflows <- SIM_data %>%
+  group_by(ORIGIN_SZ) %>%
+  summarise(total_outflow = sum(TRIPS))
+
+inflows <- SIM_data %>%
+  group_by(DESTIN_SZ) %>%
+  summarise(total_inflow = sum(TRIPS))
+
+# Join with spatial data
+zones_flow <- zones_sf %>%
+  left_join(outflows, by = c("SUBZONE_C" = "ORIGIN_SZ")) %>%
+  left_join(inflows, by = c("SUBZONE_C" = "DESTIN_SZ")) %>%
+  mutate(
+    total_outflow = replace_na(total_outflow, 0),
+    total_inflow = replace_na(total_inflow, 0),
+    net_flow = total_inflow - total_outflow
+  )
+```
+
+## Moran's I for Flows
+```{r}
+#| code-fold: false
+# Test for spatial autocorrelation in outflows
+moran_out <- moran.test(zones_flow$total_outflow, lw_knn8)
+cat("Moran's I for Outflows:\n")
+print(moran_out)
+
+# Test for spatial autocorrelation in inflows  
+moran_in <- moran.test(zones_flow$total_inflow, lw_knn8)
+cat("\nMoran's I for Inflows:\n")
+print(moran_in)
+
+# Moran scatterplots
+par(mfrow = c(1, 2))
+moran.plot(zones_flow$total_outflow, lw_knn8,
+           main = "Outflows", 
+           xlab = "Total Outflow",
+           ylab = "Lagged Outflow",
+           labels = FALSE)
+moran.plot(zones_flow$total_inflow, lw_knn8,
+           main = "Inflows",
+           xlab = "Total Inflow", 
+           ylab = "Lagged Inflow",
+           labels = FALSE)
+par(mfrow = c(1, 1))
+```
+
+## Visualize Flow Patterns
+```{r}
+#| code-fold: false
+#| fig-width: 14
+#| fig-height: 6
+# Map outflows and inflows
+tm1 <- tm_shape(zones_flow) +
+  tm_polygons("total_outflow",
+              style = "quantile",
+              n = 5,
+              palette = "Blues",
+              title = "Total Outflow") +
+  tm_layout(main.title = "Origin Flows",
+            main.title.size = 1)
+
+tm2 <- tm_shape(zones_flow) +
+  tm_polygons("total_inflow",
+              style = "quantile",
+              n = 5,
+              palette = "Reds",
+              title = "Total Inflow") +
+  tm_layout(main.title = "Destination Flows",
+            main.title.size = 1)
+
+tm3 <- tm_shape(zones_flow) +
+  tm_polygons("net_flow",
+              style = "quantile",
+              n = 5,
+              palette = "-RdBu",
+              title = "Net Flow") +
+  tm_layout(main.title = "Net Flows (In - Out)",
+            main.title.size = 1)
+
+tmap_arrange(tm1, tm2, tm3, ncol = 3)
+```
+
+# Calibrating Spatial Interaction Models
+
+## Prepare Modeling Data
+```{r}
+#| code-fold: false
+# Aggregate OD flows to zone level for spatial modeling
+zone_flows <- SIM_data %>%
+  group_by(ORIGIN_SZ) %>%
+  summarise(
+    total_outflow = sum(TRIPS),
+    avg_distance = mean(dist, na.rm = TRUE),
+    total_destinations = n_distinct(DESTIN_SZ),
+    working_pop = first(ORIGIN_AGE25_64),
+    young_pop = first(ORIGIN_AGE13_24),
+    school_pop = first(ORIGIN_AGE7_12)
+  ) %>%
+  rename(SUBZONE_C = ORIGIN_SZ)
+
+# Merge with spatial data
+spatial_model_data <- zones_sf %>%
+  left_join(zone_flows, by = "SUBZONE_C") %>%
+  filter(!is.na(total_outflow))
+
+cat("Number of zones for modeling:", nrow(spatial_model_data), "\n")
+```
+
+## Model 1: OLS Baseline
+```{r}
+#| code-fold: false
+# OLS model as baseline
+ols_model <- lm(
+  log(total_outflow + 1) ~ 
+    log(working_pop + 1) + 
+    log(young_pop + 1) + 
+    log(avg_distance/1000),
+  data = spatial_model_data
+)
+
+summary(ols_model)
+
+# Test for spatial autocorrelation in residuals
+lm.morantest(ols_model, lw_knn8, alternative = "two.sided")
+```
+
+## Model 2: Spatial Lag Model (SAR)
+```{r}
+#| code-fold: false
+# Spatial Autoregressive Model
+sar_model <- lagsarlm(
+  log(total_outflow + 1) ~ 
+    log(working_pop + 1) + 
+    log(young_pop + 1) + 
+    log(avg_distance/1000),
+  data = spatial_model_data,
+  listw = lw_knn8,
+  zero.policy = TRUE
+)
+
+summary(sar_model)
+
+# Extract spatial parameter
+cat("\nSpatial lag parameter (ρ):", round(sar_model$rho, 4), "\n")
+cat("Interpretation: Neighboring flows have a", 
+    ifelse(sar_model$rho > 0, "positive", "negative"), 
+    "effect on local flows\n")
+```
+
+## Model 3: Spatial Error Model (SEM)
+```{r}
+#| code-fold: false
+# Spatial Error Model
+sem_model <- errorsarlm(
+  log(total_outflow + 1) ~ 
+    log(working_pop + 1) + 
+    log(young_pop + 1) + 
+    log(avg_distance/1000),
+  data = spatial_model_data,
+  listw = lw_knn8,
+  zero.policy = TRUE
+)
+
+summary(sem_model)
+
+# Extract spatial parameter
+cat("\nSpatial error parameter (λ):", round(sem_model$lambda, 4), "\n")
+```
+
+## Model 4: Spatial Durbin Model (SDM)
+```{r}
+#| code-fold: false
+# Spatial Durbin Model - includes spatially lagged X variables
+sdm_model <- lagsarlm(
+  log(total_outflow + 1) ~ 
+    log(working_pop + 1) + 
+    log(young_pop + 1) + 
+    log(avg_distance/1000),
+  data = spatial_model_data,
+  listw = lw_knn8,
+  type = "mixed",
+  zero.policy = TRUE
+)
+
+summary(sdm_model)
+```
+
+## Model 5: OD Flow Count Models
+```{r}
+#| code-fold: false
+# Sample flows for computational efficiency
+set.seed(1234)
+sample_flows <- SIM_data %>%
+  filter(TRIPS > 0) %>%
+  sample_n(min(5000, n()))
+
+# Poisson regression for count data
+poisson_model <- glm(
+  TRIPS ~ 
+    log(ORIGIN_AGE25_64 + 1) + 
+    log(DESTIN_AGE25_64 + 1) + 
+    log(dist/1000),
+  data = sample_flows,
+  family = poisson()
+)
+
+summary(poisson_model)
+
+# Negative binomial for overdispersion
+nb_model <- glm.nb(
+  TRIPS ~ 
+    log(ORIGIN_AGE25_64 + 1) + 
+    log(DESTIN_AGE25_64 + 1) + 
+    log(dist/1000),
+  data = sample_flows
+)
+
+summary(nb_model)
+
+# Compare models
+cat("\nCount Model Comparison (AIC):\n")
+cat("Poisson:", AIC(poisson_model), "\n")
+cat("Negative Binomial:", AIC(nb_model), "\n")
+```
+
+# Model Comparison and Evaluation
+
+## Compare Spatial Models
+```{r}
+#| code-fold: false
+# Compare all spatial models
+model_comparison <- data.frame(
+  Model = c("OLS", "SAR", "SEM", "SDM"),
+  AIC = c(AIC(ols_model), AIC(sar_model), AIC(sem_model), AIC(sdm_model)),
+  LogLik = c(logLik(ols_model), logLik(sar_model), 
+             logLik(sem_model), logLik(sdm_model)),
+  Spatial_Param = c(NA, sar_model$rho, sem_model$lambda, sdm_model$rho)
+)
+
+kable(model_comparison, 
+      digits = 3,
+      caption = "Spatial Model Comparison")
+
+# Best model
+best_model <- model_comparison$Model[which.min(model_comparison$AIC)]
+cat("\nBest model based on AIC:", best_model, "\n")
+
+# Visualize comparison
+ggplot(model_comparison, aes(x = Model, y = AIC)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  labs(title = "Model Comparison by AIC",
+       subtitle = "Lower is better") +
+  theme_minimal()
+```
+
+## Compare with Aspatial Models
+```{r}
+#| code-fold: false
+# Load aspatial model for comparison
+SIM_data_model <- SIM_data %>%
+  dplyr::filter(TRIPS > 0, dist > 0) %>%
+  dplyr::mutate(
+    log_TRIPS = log(TRIPS),
+    log_DIST = log(dist),
+    log_ORIG_WORK = log(ORIGIN_AGE25_64),
+    log_DEST_WORK = log(DESTIN_AGE25_64)
+  )
+
+aspatial_model <- lm(log_TRIPS ~ log_ORIG_WORK + log_DEST_WORK + log_DIST,
+                     data = SIM_data_model)
+
+# Compare R-squared
+cat("\nModel Performance Comparison:\n")
+cat("=====================================\n")
+cat("Aspatial OLS R²:", round(summary(aspatial_model)$r.squared, 4), "\n")
+
+# 空间模型的拟合优度
+if(exists("sar_model")) {
+  cat("Spatial SAR Log-Likelihood:", round(sar_model$LL, 2), "\n")
+}
+
+if(exists("sem_model")) {
+  cat("Spatial SEM Log-Likelihood:", round(sem_model$LL, 2), "\n")
+}
+
+# 使用AIC比较
+cat("\nAIC Comparison:\n")
+cat("Aspatial OLS AIC:", round(AIC(aspatial_model), 2), "\n")
+if(exists("sar_model")) {
+  cat("Spatial SAR AIC:", round(AIC(sar_model), 2), "\n")
+}
+if(exists("sem_model")) {
+  cat("Spatial SEM AIC:", round(AIC(sem_model), 2), "\n")
+}
+
+# 计算改进
+if(exists("sem_model")) {
+  aic_improvement <- AIC(aspatial_model) - AIC(sem_model)
+  cat("\nAIC improvement (SEM vs OLS):", round(aic_improvement, 2), "\n")
+  cat("(Lower AIC is better, positive value means spatial model is better)\n")
+}
+```
+
+## Residual Analysis
+```{r}
+#| code-fold: false
+#| fig-width: 12
+#| fig-height: 6
+# Extract residuals from best spatial model
+if(best_model == "SEM") {
+  best_spatial_model <- sem_model
+} else if(best_model == "SAR") {
+  best_spatial_model <- sar_model
+} else {
+  best_spatial_model <- sdm_model
+}
+
+residuals_spatial <- residuals(best_spatial_model)
+
+# Add residuals to spatial data
+spatial_model_data$residuals <- residuals_spatial
+
+# Moran's I test on residuals
+moran_resid <- moran.test(residuals_spatial, lw_knn8)
+cat("\nMoran's I for Spatial Model Residuals:\n")
+print(moran_resid)
+
+# Map residuals
+tm_shape(spatial_model_data) +
+  tm_polygons("residuals",
+              style = "quantile",
+              n = 5,
+              palette = "-RdBu",
+              title = "Residuals") +
+  tm_layout(main.title = paste(best_model, "Model Residuals"),
+            main.title.size = 1)
+```
+
+# Interpreting Spatial Effects
+
+## Direct and Indirect Effects
+```{r}
+#| code-fold: false
+# Calculate and interpret effects
+cat("Interpretation of Spatial Parameters:\n")
+cat(strrep("=", 50), "\n\n")
+
+if(best_model == "SAR" || best_model == "SDM") {
+  rho_val <- sar_model$rho
+  cat("Spatial Lag Parameter (ρ):", round(rho_val, 4), "\n")
+  cat("Interpretation: A 1-unit increase in neighboring flows leads to a",
+      round(rho_val, 3), "unit increase in local flow\n\n")
+}
+
+if(best_model == "SEM") {
+  lambda_val <- sem_model$lambda
+  cat("Spatial Error Parameter (λ):", round(lambda_val, 4), "\n")
+  cat("Interpretation: Spatial correlation in unobserved factors =",
+      round(lambda_val, 3), "\n\n")
+}
+
+# Distance decay from count model
+dist_coef <- coef(nb_model)["log(dist/1000)"]
+cat("Distance Decay (from NB model):", round(dist_coef, 4), "\n")
+cat("Interpretation: 1% increase in distance reduces flow by",
+    round(abs(dist_coef), 2), "%\n")
+```
+
+## Spatial Spillover Effects
+```{r}
+#| code-fold: false
+# Calculate impacts for SAR model
+if(exists("sar_model")) {
+  tryCatch({
+    impacts_sar <- impacts(sar_model, listw = lw_knn8)
+    print(impacts_sar)
+  }, error = function(e) {
+    cat("Spatial lag parameter (rho):", round(sar_model$rho, 4), "\n")
+  })
+}
+
+# Visualize spillover example
+W_mat <- listw2mat(lw_knn8)
+
+# 使用数字索引而不是zone名称
+example_zone_idx <- 1  # 第一个zone的索引
+example_zone_name <- zones_sf$SUBZONE_C[example_zone_idx]
+
+# First-order neighbors
+first_neighbors <- which(W_mat[example_zone_idx, ] > 0)
+
+# Second-order neighbors  
+W2 <- W_mat %*% W_mat
+second_neighbors <- which(W2[example_zone_idx, ] > 0 & W_mat[example_zone_idx, ] == 0)
+
+cat("\nSpillover Example for Zone:", example_zone_name, "\n")
+cat("Number of first-order neighbors:", length(first_neighbors), "\n")
+cat("Number of second-order neighbors:", length(second_neighbors), "\n")
+
+# Visualize spillover
+zones_spillover <- zones_sf %>%
+  dplyr::mutate(
+    spillover = dplyr::case_when(
+      SUBZONE_C == example_zone_name ~ "Origin",
+      row_number() %in% first_neighbors ~ "First-order",
+      row_number() %in% second_neighbors ~ "Second-order",
+      TRUE ~ "No direct effect"
+    )
+  )
+
+tm_shape(zones_spillover) +
+  tm_polygons("spillover",
+              palette = c("Origin" = "red",
+                         "First-order" = "orange", 
+                         "Second-order" = "yellow",
+                         "No direct effect" = "grey90"),
+              title = "Spillover Effects") +
+  tm_layout(main.title = paste("Spatial Spillover from", example_zone_name),
+            main.title.size = 1)
+```
+
+# Advanced Visualization
+
+## Network Visualization of Flows
+```{r}
+#| code-fold: false
+#| fig-width: 12
+#| fig-height: 10
+# Select top flows for network viz - 使用基础R避免select冲突
+top_flows_all <- SIM_data[SIM_data$TRIPS > quantile(SIM_data$TRIPS, 0.95), ]
+top_flows <- top_flows_all[, c("ORIGIN_SZ", "DESTIN_SZ", "TRIPS")]
+
+# 或者明确使用dplyr
+# top_flows <- SIM_data %>%
+#   dplyr::filter(TRIPS > quantile(TRIPS, 0.95)) %>%
+#   dplyr::select(ORIGIN_SZ, DESTIN_SZ, TRIPS)
+
+# Create network graph
+g <- graph_from_data_frame(top_flows, directed = TRUE)
+E(g)$weight <- top_flows$TRIPS
+
+# Create layout based on geographic coordinates
+zone_coords <- data.frame(
+  SUBZONE_C = zones_sf$SUBZONE_C,
+  st_coordinates(st_centroid(zones_sf))
+)
+
+# Match vertices with coordinates
+vertex_names <- V(g)$name
+layout_coords <- zone_coords[match(vertex_names, zone_coords$SUBZONE_C), c("X", "Y")]
+
+# Plot network
+plot(g,
+     layout = as.matrix(layout_coords),
+     vertex.size = 5,
+     vertex.label = NA,
+     edge.arrow.size = 0.5,
+     edge.width = E(g)$weight/max(E(g)$weight) * 5,
+     edge.curved = 0.2,
+     main = "Top 5% Flow Network")
+```
+
+## Interactive Flow Map
+```{r}
+#| code-fold: false
+#| fig-width: 10
+#| fig-height: 8
+# Create flow lines for top flows
+flow_lines <- top_flows %>%
+  left_join(zone_coords, by = c("ORIGIN_SZ" = "SUBZONE_C")) %>%
+  rename(orig_X = X, orig_Y = Y) %>%
+  left_join(zone_coords, by = c("DESTIN_SZ" = "SUBZONE_C")) %>%
+  rename(dest_X = X, dest_Y = Y) %>%
+  filter(!is.na(orig_X) & !is.na(dest_X))
+
+# Create sf line objects
+create_line <- function(row) {
+  coords <- matrix(c(row$orig_X, row$orig_Y, row$dest_X, row$dest_Y),
+                   ncol = 2, byrow = TRUE)
+  st_linestring(coords)
+}
+
+flow_sf <- flow_lines %>%
+  rowwise() %>%
+  mutate(geometry = list(create_line(cur_data()))) %>%
+  ungroup() %>%
+  st_as_sf() %>%
+  st_set_crs(3414)
+
+# Interactive map
+tmap_mode("view")
+tm_shape(zones_sf) +
+  tm_polygons(alpha = 0.3) +
+tm_shape(flow_sf) +
+  tm_lines(col = "TRIPS",
+           lwd = "TRIPS",
+           scale = 5,
+           palette = "YlOrRd",
+           popup.vars = c("Origin" = "ORIGIN_SZ",
+                         "Destination" = "DESTIN_SZ",
+                         "Trips" = "TRIPS")) +
+  tm_layout(title = "Interactive Flow Map (Top 5%)")
+tmap_mode("plot")
+```
+
+# Key Findings and Conclusions
+
+## Summary of Results
+```{r}
+#| code-fold: false
+cat("KEY FINDINGS FROM SPATIAL INTERACTION MODELING\n")
+cat(strrep("=", 50), "\n\n")
+
+cat("1. SPATIAL AUTOCORRELATION\n")
+cat("   - Significant positive spatial autocorrelation in flows\n")
+cat("   - Moran's I for outflows:", round(moran_out$estimate[1], 4), "\n")
+cat("   - Moran's I for inflows:", round(moran_in$estimate[1], 4), "\n\n")
+
+cat("2. MODEL COMPARISON\n")
+cat("   - Best spatial model:", best_model, "\n")
+cat("   - AIC improvement over OLS:", 
+    round(AIC(ols_model) - min(model_comparison$AIC), 2), "\n\n")
+
+cat("3. SPATIAL EFFECTS\n")
+if(exists("sar_model")) {
+  cat("   - Spatial lag parameter (ρ):", round(sar_model$rho, 4), "\n")
+}
+if(exists("sem_model")) {
+  cat("   - Spatial error parameter (λ):", round(sem_model$lambda, 4), "\n")
+}
+cat("   - Distance decay coefficient:", round(dist_coef, 4), "\n\n")
+
+cat("4. POLICY IMPLICATIONS\n")
+cat("   - Transport interventions have network-wide effects\n")
+cat("   - Zone-specific policies affect neighboring areas\n")
+cat("   - Need to account for spatial spillovers in planning\n")
+```
+
+## Methodological Insights
+```{r}
+#| code-fold: false
+cat("\nMETHODOLOGICAL INSIGHTS\n")
+cat(strrep("=", 50), "\n\n")
+
+cat("1. Model Selection:\n")
+cat("   - SEM model best fits the data (lowest AIC)\n")
+cat("   - Strong spatial error correlation suggests omitted variables\n")
+cat("   - Count models appropriate for discrete flow data\n\n")
+
+cat("2. Computational Considerations:\n")
+cat("   - Spatial models computationally intensive\n")
+cat("   - Sample data for initial exploration\n")
+cat("   - Full models for final analysis\n\n")
+
+cat("3. Future Extensions:\n")
+cat("   - Panel data for temporal dynamics\n")
+cat("   - Machine learning for non-linear patterns\n")
+cat("   - Multi-modal transport networks\n")
+```
+
+## Conclusion
+
+This exercise demonstrated the importance of accounting for spatial dependencies in interaction models:
+
+1. **Spatial Dependencies Exist**: Significant spatial autocorrelation in flows confirms need for spatial models
+
+2. **Model Performance**: Spatial models (especially SEM) substantially outperform traditional OLS
+
+3. **Network Effects**: Flows exhibit complex spatial patterns with spillover effects
+
+4. **Policy Relevance**: Understanding spatial spillovers crucial for transport planning
+
+5. **Methodological Value**: Spatial econometric methods provide rigorous framework for flow analysis
+
+The combination of aspatial (Exercise 10a) and spatial (Exercise 10b) approaches provides comprehensive framework for analyzing spatial interactions.
+
+---
+
+*End of Exercise 10b: Spatial Spatial Interaction Models*

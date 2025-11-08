@@ -7,6 +7,244 @@
     "text": "Welcome! This is my course website for ISSS626.\n\nHands-on → see Ex01a in the navbar.\nIn-class / Take-home pages are placeholders for now."
   },
   {
+    "objectID": "Hands-on_Ex/Hands-on_ex10/ex10a.html",
+    "href": "Hands-on_Ex/Hands-on_ex10/ex10a.html",
+    "title": "Hands-on Exercise 10a: Aspatial Spatial Interaction Models",
+    "section": "",
+    "text": "Spatial Interaction Models (SIMs) are mathematical models for predicting flows between spatial entities. This hands-on exercise demonstrates the calibration of spatial interaction models using aspatial methods, following the gravity model framework.\n\n\n\nBy the end of this exercise, you will be able to:\n\nBuild and prepare Origin-Destination (OD) flow data from scratch\nCalibrate unconstrained, singly-constrained, and doubly-constrained spatial interaction models\nInterpret distance decay effects and model parameters\nCompare model performance using appropriate metrics\nVisualize interaction patterns and flow maps\n\n\n\n\nWe will use: - Planning subzone boundaries (MP14_SUBZONE_NO_SEA_PL) - Synthetic OD flow data (generated based on spatial principles) - Population and employment attributes (synthetic but realistic)"
+  },
+  {
+    "objectID": "Hands-on_Ex/Hands-on_ex10/ex10a.html#introduction",
+    "href": "Hands-on_Ex/Hands-on_ex10/ex10a.html#introduction",
+    "title": "Hands-on Exercise 10a: Aspatial Spatial Interaction Models",
+    "section": "",
+    "text": "Spatial Interaction Models (SIMs) are mathematical models for predicting flows between spatial entities. This hands-on exercise demonstrates the calibration of spatial interaction models using aspatial methods, following the gravity model framework."
+  },
+  {
+    "objectID": "Hands-on_Ex/Hands-on_ex10/ex10a.html#learning-objectives",
+    "href": "Hands-on_Ex/Hands-on_ex10/ex10a.html#learning-objectives",
+    "title": "Hands-on Exercise 10a: Aspatial Spatial Interaction Models",
+    "section": "",
+    "text": "By the end of this exercise, you will be able to:\n\nBuild and prepare Origin-Destination (OD) flow data from scratch\nCalibrate unconstrained, singly-constrained, and doubly-constrained spatial interaction models\nInterpret distance decay effects and model parameters\nCompare model performance using appropriate metrics\nVisualize interaction patterns and flow maps"
+  },
+  {
+    "objectID": "Hands-on_Ex/Hands-on_ex10/ex10a.html#the-data",
+    "href": "Hands-on_Ex/Hands-on_ex10/ex10a.html#the-data",
+    "title": "Hands-on Exercise 10a: Aspatial Spatial Interaction Models",
+    "section": "",
+    "text": "We will use: - Planning subzone boundaries (MP14_SUBZONE_NO_SEA_PL) - Synthetic OD flow data (generated based on spatial principles) - Population and employment attributes (synthetic but realistic)"
+  },
+  {
+    "objectID": "Hands-on_Ex/Hands-on_ex10/ex10a.html#loading-required-packages",
+    "href": "Hands-on_Ex/Hands-on_ex10/ex10a.html#loading-required-packages",
+    "title": "Hands-on Exercise 10a: Aspatial Spatial Interaction Models",
+    "section": "2.1 Loading Required Packages",
+    "text": "2.1 Loading Required Packages\n\npacman::p_load(tidyverse, sf, spdep, sp, tmap,\n               performance, reshape2, knitr,\n               ggpubr, corrplot, plotly,\n               DT, broom)"
+  },
+  {
+    "objectID": "Hands-on_Ex/Hands-on_ex10/ex10a.html#setting-up-environment",
+    "href": "Hands-on_Ex/Hands-on_ex10/ex10a.html#setting-up-environment",
+    "title": "Hands-on Exercise 10a: Aspatial Spatial Interaction Models",
+    "section": "2.2 Setting Up Environment",
+    "text": "2.2 Setting Up Environment\n\n# Set tmap mode\ntmap_mode(\"plot\")\n\n# Set seed for reproducibility\nset.seed(1234)\n\n# Set number formatting\noptions(scipen = 999)\noptions(digits = 4)"
+  },
+  {
+    "objectID": "Hands-on_Ex/Hands-on_ex10/ex10a.html#load-geospatial-data",
+    "href": "Hands-on_Ex/Hands-on_ex10/ex10a.html#load-geospatial-data",
+    "title": "Hands-on Exercise 10a: Aspatial Spatial Interaction Models",
+    "section": "3.1 Load Geospatial Data",
+    "text": "3.1 Load Geospatial Data\n\n# Load planning subzones from local file\nmpsz &lt;- st_read(dsn = \"data/geospatial\",\n                layer = \"MP14_SUBZONE_NO_SEA_PL\",\n                quiet = TRUE) %&gt;%\n  st_transform(crs = 3414)\n\n# Check the data\ncat(\"Number of planning subzones:\", nrow(mpsz), \"\\n\")\n\nNumber of planning subzones: 323 \n\ncat(\"CRS:\", st_crs(mpsz)$input, \"\\n\")\n\nCRS: EPSG:3414 \n\nglimpse(mpsz)\n\nRows: 323\nColumns: 16\n$ OBJECTID   &lt;int&gt; 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, …\n$ SUBZONE_NO &lt;int&gt; 2, 2, 3, 4, 5, 4, 10, 12, 4, 6, 1, 1, 3, 8, 3, 7, 9, 2, 15,…\n$ SUBZONE_N  &lt;chr&gt; \"PEOPLE'S PARK\", \"BUKIT MERAH\", \"CHINATOWN\", \"PHILLIP\", \"RA…\n$ SUBZONE_C  &lt;chr&gt; \"OTSZ02\", \"BMSZ02\", \"OTSZ03\", \"DTSZ04\", \"DTSZ05\", \"OTSZ04\",…\n$ CA_IND     &lt;chr&gt; \"Y\", \"N\", \"Y\", \"Y\", \"Y\", \"Y\", \"N\", \"Y\", \"N\", \"Y\", \"Y\", \"Y\",…\n$ PLN_AREA_N &lt;chr&gt; \"OUTRAM\", \"BUKIT MERAH\", \"OUTRAM\", \"DOWNTOWN CORE\", \"DOWNTO…\n$ PLN_AREA_C &lt;chr&gt; \"OT\", \"BM\", \"OT\", \"DT\", \"DT\", \"OT\", \"BM\", \"DT\", \"BM\", \"DT\",…\n$ REGION_N   &lt;chr&gt; \"CENTRAL REGION\", \"CENTRAL REGION\", \"CENTRAL REGION\", \"CENT…\n$ REGION_C   &lt;chr&gt; \"CR\", \"CR\", \"CR\", \"CR\", \"CR\", \"CR\", \"CR\", \"CR\", \"CR\", \"CR\",…\n$ INC_CRC    &lt;chr&gt; \"B4120D23006C932A\", \"1C51019439A68700\", \"0FF1661344C84AED\",…\n$ FMEL_UPD_D &lt;date&gt; 2016-05-11, 2016-05-11, 2016-05-11, 2016-05-11, 2016-05-11…\n$ X_ADDR     &lt;dbl&gt; 28832, 26361, 29154, 29707, 29969, 29510, 27786, 30806, 272…\n$ Y_ADDR     &lt;dbl&gt; 29420, 29384, 29158, 29745, 29573, 29646, 29590, 29530, 296…\n$ SHAPE_Leng &lt;dbl&gt; 1822.2, 3075.0, 4297.6, 871.6, 1872.8, 1605.3, 3303.2, 2897…\n$ SHAPE_Area &lt;dbl&gt; 93140, 411723, 587223, 39438, 188767, 133007, 448128, 52120…\n$ geometry   &lt;MULTIPOLYGON [m]&gt; MULTIPOLYGON (((29099 29640..., MULTIPOLYGON (…\n\n# Display first few records\nhead(mpsz, 3)\n\nSimple feature collection with 3 features and 15 fields\nGeometry type: MULTIPOLYGON\nDimension:     XY\nBounding box:  xmin: 25740 ymin: 28520 xmax: 29770 ymax: 29740\nProjected CRS: SVY21 / Singapore TM\n  OBJECTID SUBZONE_NO     SUBZONE_N SUBZONE_C CA_IND  PLN_AREA_N PLN_AREA_C\n1        1          2 PEOPLE'S PARK    OTSZ02      Y      OUTRAM         OT\n2        2          2   BUKIT MERAH    BMSZ02      N BUKIT MERAH         BM\n3        3          3     CHINATOWN    OTSZ03      Y      OUTRAM         OT\n        REGION_N REGION_C          INC_CRC FMEL_UPD_D X_ADDR Y_ADDR SHAPE_Leng\n1 CENTRAL REGION       CR B4120D23006C932A 2016-05-11  28832  29420       1822\n2 CENTRAL REGION       CR 1C51019439A68700 2016-05-11  26361  29384       3075\n3 CENTRAL REGION       CR 0FF1661344C84AED 2016-05-11  29154  29158       4298\n  SHAPE_Area                       geometry\n1      93140 MULTIPOLYGON (((29099 29640...\n2     411723 MULTIPOLYGON (((26750 29216...\n3     587223 MULTIPOLYGON (((29161 29723..."
+  },
+  {
+    "objectID": "Hands-on_Ex/Hands-on_ex10/ex10a.html#generate-population-and-employment-data",
+    "href": "Hands-on_Ex/Hands-on_ex10/ex10a.html#generate-population-and-employment-data",
+    "title": "Hands-on Exercise 10a: Aspatial Spatial Interaction Models",
+    "section": "3.2 Generate Population and Employment Data",
+    "text": "3.2 Generate Population and Employment Data\n\n# Generate synthetic population data for each subzone\nset.seed(1234)\nn_zones &lt;- nrow(mpsz)\nzone_names &lt;- mpsz$SUBZONE_C\n\n# Create population by age groups\npop_data &lt;- data.frame(\n  SUBZONE_C = zone_names,\n  TOTAL_POP = round(runif(n_zones, 1000, 50000)),\n  AGE7_12 = round(runif(n_zones, 100, 5000)),    # School age\n  AGE13_24 = round(runif(n_zones, 200, 8000)),   # Young adults\n  AGE25_64 = round(runif(n_zones, 500, 30000))   # Working age\n) %&gt;%\n  mutate(\n    # Ensure age groups sum to less than total\n    AGE7_12 = pmin(AGE7_12, TOTAL_POP * 0.15),\n    AGE13_24 = pmin(AGE13_24, TOTAL_POP * 0.20),\n    AGE25_64 = pmin(AGE25_64, TOTAL_POP * 0.60)\n  )\n\n# Add employment data (correlated with working age population)\npop_data &lt;- pop_data %&gt;%\n  mutate(\n    EMPLOYMENT = round(AGE25_64 * runif(n_zones, 0.3, 0.7))\n  )\n\n# Display summary\nsummary(pop_data[, c(\"TOTAL_POP\", \"AGE25_64\", \"EMPLOYMENT\")])\n\n   TOTAL_POP        AGE25_64       EMPLOYMENT   \n Min.   : 1161   Min.   :  539   Min.   :  312  \n 1st Qu.:14031   1st Qu.: 4404   1st Qu.: 1990  \n Median :25227   Median : 8539   Median : 4123  \n Mean   :25119   Mean   : 9982   Mean   : 4885  \n 3rd Qu.:37351   3rd Qu.:14862   3rd Qu.: 6936  \n Max.   :49938   Max.   :28539   Max.   :16298"
+  },
+  {
+    "objectID": "Hands-on_Ex/Hands-on_ex10/ex10a.html#calculate-distance-matrix",
+    "href": "Hands-on_Ex/Hands-on_ex10/ex10a.html#calculate-distance-matrix",
+    "title": "Hands-on Exercise 10a: Aspatial Spatial Interaction Models",
+    "section": "3.3 Calculate Distance Matrix",
+    "text": "3.3 Calculate Distance Matrix\n\n# Calculate centroids\ncentroids &lt;- st_centroid(mpsz)\n\n# Calculate distance matrix\ndist_matrix &lt;- st_distance(centroids, centroids)\ndist_matrix &lt;- as.matrix(dist_matrix)\n\n# Set row and column names\nrownames(dist_matrix) &lt;- zone_names\ncolnames(dist_matrix) &lt;- zone_names\n\ncat(\"Distance matrix dimensions:\", dim(dist_matrix), \"\\n\")\n\nDistance matrix dimensions: 323 323 \n\ncat(\"Distance range (m):\", range(dist_matrix), \"\\n\")\n\nDistance range (m): 0 48233 \n\n# Convert to long format\ndist_df &lt;- as.data.frame(as.table(dist_matrix))\nnames(dist_df) &lt;- c(\"ORIGIN_SZ\", \"DESTIN_SZ\", \"dist\")\n\n# Remove intra-zonal flows\ndist_df &lt;- dist_df %&gt;%\n  filter(ORIGIN_SZ != DESTIN_SZ)\n\nhead(dist_df)\n\n  ORIGIN_SZ DESTIN_SZ       dist\n1    BMSZ02    OTSZ02 2471.2 [m]\n2    OTSZ03    OTSZ02  415.0 [m]\n3    DTSZ04    OTSZ02  933.4 [m]\n4    DTSZ05    OTSZ02 1147.1 [m]\n5    OTSZ04    OTSZ02  714.8 [m]\n6    BMSZ10    OTSZ02 1060.0 [m]"
+  },
+  {
+    "objectID": "Hands-on_Ex/Hands-on_ex10/ex10a.html#generate-od-flow-data",
+    "href": "Hands-on_Ex/Hands-on_ex10/ex10a.html#generate-od-flow-data",
+    "title": "Hands-on Exercise 10a: Aspatial Spatial Interaction Models",
+    "section": "3.4 Generate OD Flow Data",
+    "text": "3.4 Generate OD Flow Data\n\n# Generate realistic OD flows based on gravity model principles\nset.seed(1234)\n\n# Merge distance with population data\nod_base &lt;- dist_df %&gt;%\n  mutate(dist = as.numeric(dist)) %&gt;%  # 转换为数值，去除单位\n  left_join(pop_data %&gt;% select(SUBZONE_C, ORIG_POP = AGE25_64, ORIG_EMP = EMPLOYMENT),\n            by = c(\"ORIGIN_SZ\" = \"SUBZONE_C\")) %&gt;%\n  left_join(pop_data %&gt;% select(SUBZONE_C, DEST_POP = AGE25_64, DEST_EMP = EMPLOYMENT),\n            by = c(\"DESTIN_SZ\" = \"SUBZONE_C\"))\n\n# Generate flows using gravity model with noise\nod_flows &lt;- od_base %&gt;%\n  mutate(\n    # Basic gravity model: Flow = k * (Pop_i * Emp_j) / distance^beta\n    expected_flow = 0.01 * (ORIG_POP * DEST_EMP) / (dist^1.5),\n    # Add random variation\n    TRIPS = pmax(0, round(expected_flow * exp(rnorm(n(), 0, 0.5))))\n  ) %&gt;%\n  select(ORIGIN_SZ, DESTIN_SZ, dist, TRIPS)\n\n# Summary of generated flows\ncat(\"\\nGenerated OD flows summary:\\n\")\n\n\nGenerated OD flows summary:\n\ncat(\"Total OD pairs:\", nrow(od_flows), \"\\n\")\n\nTotal OD pairs: 104006 \n\ncat(\"Total trips:\", sum(od_flows$TRIPS), \"\\n\")\n\nTotal trips: 107448 \n\ncat(\"Zero flows:\", sum(od_flows$TRIPS == 0), \n    \"(\", round(sum(od_flows$TRIPS == 0)/nrow(od_flows)*100, 2), \"%)\\n\")\n\nZero flows: 68572 ( 65.93 %)\n\nsummary(od_flows$TRIPS)\n\n   Min. 1st Qu.  Median    Mean 3rd Qu.    Max. \n   0.00    0.00    0.00    1.03    1.00  447.00"
+  },
+  {
+    "objectID": "Hands-on_Ex/Hands-on_ex10/ex10a.html#create-complete-sim_data",
+    "href": "Hands-on_Ex/Hands-on_ex10/ex10a.html#create-complete-sim_data",
+    "title": "Hands-on Exercise 10a: Aspatial Spatial Interaction Models",
+    "section": "3.5 Create Complete SIM_data",
+    "text": "3.5 Create Complete SIM_data\n\n# Create the complete SIM_data dataset - OPTIMIZED VERSION\n\n# 1) Prepare attributes WITHOUT geometry (much faster!)\norig_attr &lt;- pop_data %&gt;%\n  select(SUBZONE_C, \n         ORIGIN_AGE7_12 = AGE7_12,\n         ORIGIN_AGE13_24 = AGE13_24,\n         ORIGIN_AGE25_64 = AGE25_64) %&gt;%\n  distinct(SUBZONE_C, .keep_all = TRUE)\n\ndest_attr &lt;- pop_data %&gt;%\n  select(SUBZONE_C,\n         DESTIN_AGE7_12 = AGE7_12,\n         DESTIN_AGE13_24 = AGE13_24,\n         DESTIN_AGE25_64 = AGE25_64) %&gt;%\n  distinct(SUBZONE_C, .keep_all = TRUE)\n\n# 2) Ensure character keys for consistent joining (check type first)\nod_flows &lt;- od_flows %&gt;%\n  mutate(ORIGIN_SZ = as.character(ORIGIN_SZ),\n         DESTIN_SZ = as.character(DESTIN_SZ))\n\n# Only convert if not already character\nif (!is.character(orig_attr$SUBZONE_C)) {\n  orig_attr &lt;- orig_attr %&gt;%\n    mutate(SUBZONE_C = as.character(SUBZONE_C))\n}\n\nif (!is.character(dest_attr$SUBZONE_C)) {\n  dest_attr &lt;- dest_attr %&gt;%\n    mutate(SUBZONE_C = as.character(SUBZONE_C))\n}\n\n# 3) Clean memory before big joins\ngc()\n\n          used  (Mb) gc trigger  (Mb) max used  (Mb)\nNcells 3841016 205.2    6933212 370.3  6933212 370.3\nVcells 7480987  57.1   14786712 112.9 12255456  93.6\n\n# 4) Join without geometry - MUCH FASTER!\nSIM_data &lt;- od_flows %&gt;%\n  left_join(orig_attr, by = c(\"ORIGIN_SZ\" = \"SUBZONE_C\")) %&gt;%\n  left_join(dest_attr, by = c(\"DESTIN_SZ\" = \"SUBZONE_C\"))\n\n# 5) Handle potential zeros for log transformations\nage_columns &lt;- c(\"ORIGIN_AGE7_12\", \"ORIGIN_AGE13_24\", \"ORIGIN_AGE25_64\",\n                 \"DESTIN_AGE7_12\", \"DESTIN_AGE13_24\", \"DESTIN_AGE25_64\")\n\nfor (col in age_columns) {\n  if (col %in% names(SIM_data)) {\n    SIM_data[[col]] &lt;- ifelse(is.na(SIM_data[[col]]) | SIM_data[[col]] == 0, \n                              0.99, \n                              SIM_data[[col]])\n  }\n}\n\n# 6) Verify the dataset\nstopifnot(all(c(\"ORIGIN_SZ\", \"DESTIN_SZ\", \"TRIPS\", \"dist\") %in% names(SIM_data)))\n\n# Check the final dataset\nglimpse(SIM_data)\n\nRows: 104,006\nColumns: 10\n$ ORIGIN_SZ       &lt;chr&gt; \"BMSZ02\", \"OTSZ03\", \"DTSZ04\", \"DTSZ05\", \"OTSZ04\", \"BMS…\n$ DESTIN_SZ       &lt;chr&gt; \"OTSZ02\", \"OTSZ02\", \"OTSZ02\", \"OTSZ02\", \"OTSZ02\", \"OTS…\n$ dist            &lt;dbl&gt; 2471.2, 415.0, 933.4, 1147.1, 714.8, 1060.0, 1977.6, 1…\n$ TRIPS           &lt;dbl&gt; 2, 48, 1, 4, 8, 1, 1, 2, 4, 1, 32, 3, 0, 1, 4, 3, 1, 1…\n$ ORIGIN_AGE7_12  &lt;dbl&gt; 1762.0, 1899.0, 2194.0, 1013.0, 3324.0, 219.8, 1859.2,…\n$ ORIGIN_AGE13_24 &lt;dbl&gt; 6299, 4194, 6309, 2047, 5557, 293, 2479, 1529, 4168, 6…\n$ ORIGIN_AGE25_64 &lt;dbl&gt; 18896, 18512, 594, 23207, 6407, 879, 7437, 7531, 15719…\n$ DESTIN_AGE7_12  &lt;dbl&gt; 851, 851, 851, 851, 851, 851, 851, 851, 851, 851, 851,…\n$ DESTIN_AGE13_24 &lt;dbl&gt; 644, 644, 644, 644, 644, 644, 644, 644, 644, 644, 644,…\n$ DESTIN_AGE25_64 &lt;dbl&gt; 3943, 3943, 3943, 3943, 3943, 3943, 3943, 3943, 3943, …\n\ncat(\"\\nFinal SIM_data dimensions:\", dim(SIM_data), \"\\n\")\n\n\nFinal SIM_data dimensions: 104006 10 \n\ncat(\"Missing values in dist:\", sum(is.na(SIM_data$dist)), \"\\n\")\n\nMissing values in dist: 0 \n\ncat(\"Zero trips:\", sum(SIM_data$TRIPS == 0), \"\\n\")\n\nZero trips: 68572 \n\n# 7) Create directory if it doesn't exist and save\nif (!dir.exists(\"data/rds\")) {\n  dir.create(\"data/rds\", recursive = TRUE, showWarnings = FALSE)\n  cat(\"Created directory: data/rds\\n\")\n}\n\n# Save the data\nwrite_rds(SIM_data, \"data/rds/SIM_data.rds\")\ncat(\"\\nSIM_data successfully saved to data/rds/SIM_data.rds for use in Exercise 10b\\n\")\n\n\nSIM_data successfully saved to data/rds/SIM_data.rds for use in Exercise 10b\n\n# Verify file was saved\nif (file.exists(\"data/rds/SIM_data.rds\")) {\n  file_size &lt;- file.size(\"data/rds/SIM_data.rds\") / 1024 / 1024  # Convert to MB\n  cat(\"File size:\", round(file_size, 2), \"MB\\n\")\n} else {\n  cat(\"Warning: File was not saved successfully!\\n\")\n}\n\nFile size: 9.13 MB"
+  },
+  {
+    "objectID": "Hands-on_Ex/Hands-on_ex10/ex10a.html#flow-distribution",
+    "href": "Hands-on_Ex/Hands-on_ex10/ex10a.html#flow-distribution",
+    "title": "Hands-on Exercise 10a: Aspatial Spatial Interaction Models",
+    "section": "4.1 Flow Distribution",
+    "text": "4.1 Flow Distribution\n\n# Distribution of flows\np1 &lt;- ggplot(data = SIM_data,\n             aes(x = TRIPS)) +\n  geom_histogram(bins = 50,\n                 fill = \"lightblue\",\n                 color = \"black\") +\n  labs(title = \"Distribution of Trips\",\n       x = \"Number of Trips\",\n       y = \"Frequency\") +\n  theme_minimal()\n\np2 &lt;- ggplot(data = SIM_data %&gt;% filter(TRIPS &gt; 0),\n             aes(x = log(TRIPS + 1))) +\n  geom_histogram(bins = 50,\n                 fill = \"lightgreen\",\n                 color = \"black\") +\n  labs(title = \"Distribution of Log(Trips + 1)\",\n       x = \"Log(Number of Trips + 1)\",\n       y = \"Frequency\") +\n  theme_minimal()\n\nggarrange(p1, p2, ncol = 2)\n\n\n\n\n\n\n\n# Statistics\ncat(\"\\nFlow Statistics:\\n\")\n\n\nFlow Statistics:\n\nsummary(SIM_data$TRIPS)\n\n   Min. 1st Qu.  Median    Mean 3rd Qu.    Max. \n   0.00    0.00    0.00    1.03    1.00  447.00 \n\ncat(\"Percentage of zero flows:\", \n    round(sum(SIM_data$TRIPS == 0)/nrow(SIM_data)*100, 2), \"%\\n\")\n\nPercentage of zero flows: 65.93 %"
+  },
+  {
+    "objectID": "Hands-on_Ex/Hands-on_ex10/ex10a.html#distance-decay-effect",
+    "href": "Hands-on_Ex/Hands-on_ex10/ex10a.html#distance-decay-effect",
+    "title": "Hands-on Exercise 10a: Aspatial Spatial Interaction Models",
+    "section": "4.2 Distance Decay Effect",
+    "text": "4.2 Distance Decay Effect\n\n# Filter and sample data for visualization (use sample for smooth calculation)\nSIM_data_positive &lt;- SIM_data %&gt;% \n  filter(TRIPS &gt; 0)\n\n# For smooth line, use a sample to speed up calculation\nSIM_data_sample &lt;- SIM_data_positive %&gt;%\n  sample_n(min(1000, nrow(SIM_data_positive)))\n\n# Distance decay plot - optimized version\nggplot() +\n  # All points with transparency\n  geom_point(data = SIM_data_positive,\n             aes(x = dist/1000, y = TRIPS),\n             alpha = 0.1, size = 0.5, color = \"darkblue\") +\n  # Smooth line using sample only\n  geom_smooth(data = SIM_data_sample,\n              aes(x = dist/1000, y = TRIPS),\n              method = \"loess\", color = \"red\", se = TRUE) +\n  scale_y_log10() +\n  scale_x_continuous(breaks = seq(0, 50, 10)) +\n  labs(title = \"Distance Decay Effect on Trips\",\n       subtitle = paste(\"Based on\", nrow(SIM_data_positive), \"positive flows\"),\n       x = \"Distance (km)\",\n       y = \"Number of Trips (log scale)\") +\n  theme_minimal()\n\n\n\n\n\n\n\n# Correlation\ncor_test &lt;- cor.test(SIM_data$dist, SIM_data$TRIPS)\ncat(\"\\nCorrelation between distance and flow:\", \n    round(cor_test$estimate, 3), \"\\n\")\n\n\nCorrelation between distance and flow: -0.242"
+  },
+  {
+    "objectID": "Hands-on_Ex/Hands-on_ex10/ex10a.html#top-origin-destination-pairs",
+    "href": "Hands-on_Ex/Hands-on_ex10/ex10a.html#top-origin-destination-pairs",
+    "title": "Hands-on Exercise 10a: Aspatial Spatial Interaction Models",
+    "section": "4.3 Top Origin-Destination Pairs",
+    "text": "4.3 Top Origin-Destination Pairs\n\n# Top 15 OD pairs\ntop_flows &lt;- SIM_data %&gt;%\n  arrange(desc(TRIPS)) %&gt;%\n  head(15) %&gt;%\n  select(ORIGIN_SZ, DESTIN_SZ, TRIPS, dist, ORIGIN_AGE25_64, DESTIN_AGE25_64)\n\nkable(top_flows,\n      col.names = c(\"Origin\", \"Destination\", \"Trips\", \n                    \"Distance(m)\", \"Origin Working Age\", \"Dest Working Age\"),\n      caption = \"Top 15 Origin-Destination Pairs by Trip Volume\",\n      digits = 0)\n\n\nTop 15 Origin-Destination Pairs by Trip Volume\n\n\n\n\n\n\n\n\n\n\nOrigin\nDestination\nTrips\nDistance(m)\nOrigin Working Age\nDest Working Age\n\n\n\n\nRCSZ04\nRCSZ03\n447\n206\n15043\n11547\n\n\nRCSZ06\nRCSZ07\n344\n434\n15101\n17904\n\n\nRCSZ03\nRCSZ04\n333\n206\n11547\n15043\n\n\nDTSZ06\nDTSZ05\n324\n459\n15719\n23207\n\n\nRCSZ04\nRCSZ05\n305\n311\n15043\n11247\n\n\nTPSZ04\nTPSZ07\n195\n728\n14992\n12650\n\n\nAMSZ09\nAMSZ10\n193\n841\n22032\n23328\n\n\nAMSZ10\nAMSZ09\n180\n841\n23328\n22032\n\n\nRCSZ05\nRCSZ04\n175\n311\n11247\n15043\n\n\nPGSZ06\nPGSZ07\n173\n551\n18496\n16724\n\n\nMPSZ04\nMPSZ03\n169\n366\n9762\n6422\n\n\nBMSZ12\nBMSZ07\n166\n595\n15359\n25216\n\n\nDTSZ05\nDTSZ06\n165\n459\n23207\n15719\n\n\nAMSZ09\nAMSZ06\n161\n866\n22032\n22887\n\n\nMUSZ01\nRCSZ07\n153\n474\n15211\n17904"
+  },
+  {
+    "objectID": "Hands-on_Ex/Hands-on_ex10/ex10a.html#correlation-analysis",
+    "href": "Hands-on_Ex/Hands-on_ex10/ex10a.html#correlation-analysis",
+    "title": "Hands-on Exercise 10a: Aspatial Spatial Interaction Models",
+    "section": "4.4 Correlation Analysis",
+    "text": "4.4 Correlation Analysis\n\n# Select variables for correlation\ncor_data &lt;- SIM_data %&gt;%\n  select(TRIPS, dist, \n         ORIGIN_AGE7_12, ORIGIN_AGE13_24, ORIGIN_AGE25_64,\n         DESTIN_AGE7_12, DESTIN_AGE13_24, DESTIN_AGE25_64) %&gt;%\n  rename(\"Trips\" = TRIPS,\n         \"Distance\" = dist,\n         \"O_School\" = ORIGIN_AGE7_12,\n         \"O_Young\" = ORIGIN_AGE13_24,\n         \"O_Work\" = ORIGIN_AGE25_64,\n         \"D_School\" = DESTIN_AGE7_12,\n         \"D_Young\" = DESTIN_AGE13_24,\n         \"D_Work\" = DESTIN_AGE25_64)\n\n# Correlation matrix\ncor_matrix &lt;- cor(cor_data, use = \"complete.obs\")\n\n# Visualize\ncorrplot(cor_matrix,\n         method = \"color\",\n         type = \"upper\",\n         order = \"hclust\",\n         tl.cex = 0.8,\n         tl.col = \"black\",\n         addCoef.col = \"black\",\n         number.cex = 0.6)"
+  },
+  {
+    "objectID": "Hands-on_Ex/Hands-on_ex10/ex10a.html#prepare-modeling-data",
+    "href": "Hands-on_Ex/Hands-on_ex10/ex10a.html#prepare-modeling-data",
+    "title": "Hands-on Exercise 10a: Aspatial Spatial Interaction Models",
+    "section": "5.1 Prepare Modeling Data",
+    "text": "5.1 Prepare Modeling Data\n\n# Remove flows with zero or missing values for log transformation\nSIM_data_model &lt;- SIM_data %&gt;%\n  filter(TRIPS &gt; 0,\n         dist &gt; 0,\n         ORIGIN_AGE25_64 &gt; 0,\n         DESTIN_AGE25_64 &gt; 0) %&gt;%\n  mutate(\n    log_TRIPS = log(TRIPS),\n    log_DIST = log(dist),\n    log_ORIG_WORK = log(ORIGIN_AGE25_64),\n    log_DEST_WORK = log(DESTIN_AGE25_64)\n  )\n\ncat(\"Number of observations for modeling:\", nrow(SIM_data_model), \"\\n\")\n\nNumber of observations for modeling: 35434 \n\ncat(\"Percentage of data retained:\", \n    round(nrow(SIM_data_model)/nrow(SIM_data)*100, 2), \"%\\n\")\n\nPercentage of data retained: 34.07 %"
+  },
+  {
+    "objectID": "Hands-on_Ex/Hands-on_ex10/ex10a.html#unconstrained-model",
+    "href": "Hands-on_Ex/Hands-on_ex10/ex10a.html#unconstrained-model",
+    "title": "Hands-on Exercise 10a: Aspatial Spatial Interaction Models",
+    "section": "5.2 Unconstrained Model",
+    "text": "5.2 Unconstrained Model\n\n5.2.1 Basic Gravity Model\n\n# Unconstrained gravity model\nuncSIM &lt;- lm(log_TRIPS ~ log_ORIG_WORK + log_DEST_WORK + log_DIST,\n             data = SIM_data_model)\n\nsummary(uncSIM)\n\n\nCall:\nlm(formula = log_TRIPS ~ log_ORIG_WORK + log_DEST_WORK + log_DIST, \n    data = SIM_data_model)\n\nResiduals:\n    Min      1Q  Median      3Q     Max \n-1.6649 -0.3100 -0.0135  0.2943  2.4018 \n\nCoefficients:\n              Estimate Std. Error t value            Pr(&gt;|t|)    \n(Intercept)   -2.56180    0.05349   -47.9 &lt;0.0000000000000002 ***\nlog_ORIG_WORK  0.65323    0.00437   149.3 &lt;0.0000000000000002 ***\nlog_DEST_WORK  0.64695    0.00434   149.1 &lt;0.0000000000000002 ***\nlog_DIST      -1.03215    0.00383  -269.7 &lt;0.0000000000000002 ***\n---\nSignif. codes:  0 '***' 0.001 '**' 0.01 '*' 0.05 '.' 0.1 ' ' 1\n\nResidual standard error: 0.464 on 35430 degrees of freedom\nMultiple R-squared:  0.68,  Adjusted R-squared:  0.68 \nF-statistic: 2.51e+04 on 3 and 35430 DF,  p-value: &lt;0.0000000000000002\n\n# Extract parameters\nbeta_dist &lt;- -coef(uncSIM)[\"log_DIST\"]\ncat(\"\\nDistance decay parameter (β):\", round(beta_dist, 3), \"\\n\")\n\n\nDistance decay parameter (β): 1.032 \n\ncat(\"Interpretation: 1% increase in distance reduces flow by\", \n    round(beta_dist, 2), \"%\\n\")\n\nInterpretation: 1% increase in distance reduces flow by 1.03 %\n\n\n\n\n5.2.2 Model Diagnostics\n\n# Diagnostic plots\npar(mfrow = c(2, 2))\nplot(uncSIM)\n\n\n\n\n\n\n\npar(mfrow = c(1, 1))\n\n# Performance metrics\ncat(\"\\nModel Performance:\\n\")\n\n\nModel Performance:\n\ncat(\"R-squared:\", round(summary(uncSIM)$r.squared, 4), \"\\n\")\n\nR-squared: 0.6798 \n\ncat(\"Adjusted R-squared:\", round(summary(uncSIM)$adj.r.squared, 4), \"\\n\")\n\nAdjusted R-squared: 0.6798 \n\ncat(\"AIC:\", round(AIC(uncSIM), 2), \"\\n\")\n\nAIC: 46155 \n\ncat(\"BIC:\", round(BIC(uncSIM), 2), \"\\n\")\n\nBIC: 46198"
+  },
+  {
+    "objectID": "Hands-on_Ex/Hands-on_ex10/ex10a.html#origin-constrained-model",
+    "href": "Hands-on_Ex/Hands-on_ex10/ex10a.html#origin-constrained-model",
+    "title": "Hands-on Exercise 10a: Aspatial Spatial Interaction Models",
+    "section": "5.3 Origin-Constrained Model",
+    "text": "5.3 Origin-Constrained Model\n\n# Origin-constrained model with fixed effects\norcSIM &lt;- lm(log_TRIPS ~ ORIGIN_SZ + log_DEST_WORK + log_DIST,\n             data = SIM_data_model)\n\n# Display non-fixed effect coefficients\ncoef_summary &lt;- summary(orcSIM)$coefficients\nnon_fe_coefs &lt;- coef_summary[c(\"log_DEST_WORK\", \"log_DIST\"), ]\nprint(non_fe_coefs)\n\n              Estimate Std. Error t value Pr(&gt;|t|)\nlog_DEST_WORK   0.6459   0.004344   148.7        0\nlog_DIST       -1.0368   0.003956  -262.1        0\n\n# Model performance\ncat(\"\\nOrigin-Constrained Model Performance:\\n\")\n\n\nOrigin-Constrained Model Performance:\n\ncat(\"R-squared:\", round(summary(orcSIM)$r.squared, 4), \"\\n\")\n\nR-squared: 0.6839 \n\ncat(\"Adjusted R-squared:\", round(summary(orcSIM)$adj.r.squared, 4), \"\\n\")\n\nAdjusted R-squared: 0.681 \n\ncat(\"AIC:\", round(AIC(orcSIM), 2), \"\\n\")\n\nAIC: 46340"
+  },
+  {
+    "objectID": "Hands-on_Ex/Hands-on_ex10/ex10a.html#destination-constrained-model",
+    "href": "Hands-on_Ex/Hands-on_ex10/ex10a.html#destination-constrained-model",
+    "title": "Hands-on Exercise 10a: Aspatial Spatial Interaction Models",
+    "section": "5.4 Destination-Constrained Model",
+    "text": "5.4 Destination-Constrained Model\n\n# Destination-constrained model\ndecSIM &lt;- lm(log_TRIPS ~ DESTIN_SZ + log_ORIG_WORK + log_DIST,\n             data = SIM_data_model)\n\n# Display non-fixed effect coefficients\ncoef_summary_dec &lt;- summary(decSIM)$coefficients\nnon_fe_coefs_dec &lt;- coef_summary_dec[c(\"log_ORIG_WORK\", \"log_DIST\"), ]\nprint(non_fe_coefs_dec)\n\n              Estimate Std. Error t value Pr(&gt;|t|)\nlog_ORIG_WORK   0.6791   0.004145   163.9        0\nlog_DIST       -1.0680   0.003751  -284.8        0\n\n# Model performance\ncat(\"\\nDestination-Constrained Model Performance:\\n\")\n\n\nDestination-Constrained Model Performance:\n\ncat(\"R-squared:\", round(summary(decSIM)$r.squared, 4), \"\\n\")\n\nR-squared: 0.7195 \n\ncat(\"Adjusted R-squared:\", round(summary(decSIM)$adj.r.squared, 4), \"\\n\")\n\nAdjusted R-squared: 0.7169 \n\ncat(\"AIC:\", round(AIC(decSIM), 2), \"\\n\")\n\nAIC: 42112"
+  },
+  {
+    "objectID": "Hands-on_Ex/Hands-on_ex10/ex10a.html#doubly-constrained-model",
+    "href": "Hands-on_Ex/Hands-on_ex10/ex10a.html#doubly-constrained-model",
+    "title": "Hands-on Exercise 10a: Aspatial Spatial Interaction Models",
+    "section": "5.5 Doubly-Constrained Model",
+    "text": "5.5 Doubly-Constrained Model\n\n# Doubly-constrained model\ndbcSIM &lt;- lm(log_TRIPS ~ ORIGIN_SZ + DESTIN_SZ + log_DIST,\n             data = SIM_data_model)\n\n# Extract distance coefficient\ndistance_coef &lt;- coef(dbcSIM)[\"log_DIST\"]\ncat(\"Distance decay parameter (β):\", round(-distance_coef, 3), \"\\n\")\n\nDistance decay parameter (β): 1.071 \n\ncat(\"Standard error:\", round(summary(dbcSIM)$coefficients[\"log_DIST\", 2], 4), \"\\n\")\n\nStandard error: 0.0039 \n\ncat(\"t-value:\", round(summary(dbcSIM)$coefficients[\"log_DIST\", 3], 2), \"\\n\")\n\nt-value: -278 \n\n# Model performance\ncat(\"\\nDoubly-Constrained Model Performance:\\n\")\n\n\nDoubly-Constrained Model Performance:\n\ncat(\"R-squared:\", round(summary(dbcSIM)$r.squared, 4), \"\\n\")\n\nR-squared: 0.7233 \n\ncat(\"Adjusted R-squared:\", round(summary(dbcSIM)$adj.r.squared, 4), \"\\n\")\n\nAdjusted R-squared: 0.7182 \n\ncat(\"AIC:\", round(AIC(dbcSIM), 2), \"\\n\")\n\nAIC: 42262"
+  },
+  {
+    "objectID": "Hands-on_Ex/Hands-on_ex10/ex10a.html#enhanced-model-with-multiple-age-groups",
+    "href": "Hands-on_Ex/Hands-on_ex10/ex10a.html#enhanced-model-with-multiple-age-groups",
+    "title": "Hands-on Exercise 10a: Aspatial Spatial Interaction Models",
+    "section": "5.6 Enhanced Model with Multiple Age Groups",
+    "text": "5.6 Enhanced Model with Multiple Age Groups\n\n# Add multiple age group variables\nattSIM &lt;- lm(log_TRIPS ~ log_ORIG_WORK + log_DEST_WORK + log_DIST +\n             log(ORIGIN_AGE13_24 + 1) + log(DESTIN_AGE13_24 + 1) +\n             log(ORIGIN_AGE7_12 + 1) + log(DESTIN_AGE7_12 + 1),\n             data = SIM_data_model)\n\nsummary(attSIM)\n\n\nCall:\nlm(formula = log_TRIPS ~ log_ORIG_WORK + log_DEST_WORK + log_DIST + \n    log(ORIGIN_AGE13_24 + 1) + log(DESTIN_AGE13_24 + 1) + log(ORIGIN_AGE7_12 + \n    1) + log(DESTIN_AGE7_12 + 1), data = SIM_data_model)\n\nResiduals:\n    Min      1Q  Median      3Q     Max \n-1.6596 -0.3082 -0.0137  0.2948  2.4033 \n\nCoefficients:\n                         Estimate Std. Error t value            Pr(&gt;|t|)    \n(Intercept)              -2.66894    0.06055  -44.08 &lt;0.0000000000000002 ***\nlog_ORIG_WORK             0.65351    0.00451  144.89 &lt;0.0000000000000002 ***\nlog_DEST_WORK             0.64078    0.00448  143.04 &lt;0.0000000000000002 ***\nlog_DIST                 -1.03242    0.00383 -269.64 &lt;0.0000000000000002 ***\nlog(ORIGIN_AGE13_24 + 1) -0.00221    0.00301   -0.74              0.4623    \nlog(DESTIN_AGE13_24 + 1)  0.00914    0.00302    3.03              0.0024 ** \nlog(ORIGIN_AGE7_12 + 1)   0.00174    0.00347    0.50              0.6147    \nlog(DESTIN_AGE7_12 + 1)   0.01286    0.00345    3.72              0.0002 ***\n---\nSignif. codes:  0 '***' 0.001 '**' 0.01 '*' 0.05 '.' 0.1 ' ' 1\n\nResidual standard error: 0.464 on 35426 degrees of freedom\nMultiple R-squared:  0.68,  Adjusted R-squared:  0.68 \nF-statistic: 1.08e+04 on 7 and 35426 DF,  p-value: &lt;0.0000000000000002\n\n# Model performance\ncat(\"\\nEnhanced Model Performance:\\n\")\n\n\nEnhanced Model Performance:\n\ncat(\"R-squared:\", round(summary(attSIM)$r.squared, 4), \"\\n\")\n\nR-squared: 0.6801 \n\ncat(\"Adjusted R-squared:\", round(summary(attSIM)$adj.r.squared, 4), \"\\n\")\n\nAdjusted R-squared: 0.68 \n\ncat(\"AIC:\", round(AIC(attSIM), 2), \"\\n\")\n\nAIC: 46132"
+  },
+  {
+    "objectID": "Hands-on_Ex/Hands-on_ex10/ex10a.html#performance-metrics-comparison",
+    "href": "Hands-on_Ex/Hands-on_ex10/ex10a.html#performance-metrics-comparison",
+    "title": "Hands-on Exercise 10a: Aspatial Spatial Interaction Models",
+    "section": "6.1 Performance Metrics Comparison",
+    "text": "6.1 Performance Metrics Comparison\n\n# Create comparison table\nmodel_comparison &lt;- data.frame(\n  Model = c(\"Unconstrained\", \"Origin-Constrained\", \n            \"Destination-Constrained\", \"Doubly-Constrained\",\n            \"Enhanced\"),\n  R2 = c(summary(uncSIM)$r.squared,\n         summary(orcSIM)$r.squared,\n         summary(decSIM)$r.squared,\n         summary(dbcSIM)$r.squared,\n         summary(attSIM)$r.squared),\n  Adj_R2 = c(summary(uncSIM)$adj.r.squared,\n             summary(orcSIM)$adj.r.squared,\n             summary(decSIM)$adj.r.squared,\n             summary(dbcSIM)$adj.r.squared,\n             summary(attSIM)$adj.r.squared),\n  AIC = c(AIC(uncSIM), AIC(orcSIM), AIC(decSIM), \n          AIC(dbcSIM), AIC(attSIM)),\n  BIC = c(BIC(uncSIM), BIC(orcSIM), BIC(decSIM), \n          BIC(dbcSIM), BIC(attSIM))\n) %&gt;%\n  arrange(desc(R2))\n\nkable(model_comparison,\n      digits = 4,\n      caption = \"Model Performance Comparison\")\n\n\nModel Performance Comparison\n\n\nModel\nR2\nAdj_R2\nAIC\nBIC\n\n\n\n\nDoubly-Constrained\n0.7233\n0.7182\n42262\n47746\n\n\nDestination-Constrained\n0.7195\n0.7169\n42112\n44875\n\n\nOrigin-Constrained\n0.6839\n0.6810\n46340\n49103\n\n\nEnhanced\n0.6801\n0.6800\n46132\n46208\n\n\nUnconstrained\n0.6798\n0.6798\n46155\n46198\n\n\n\n\n# Visualize comparison\nmodel_comp_long &lt;- model_comparison %&gt;%\n  select(Model, R2, Adj_R2) %&gt;%\n  pivot_longer(cols = c(R2, Adj_R2),\n               names_to = \"Metric\",\n               values_to = \"Value\")\n\nggplot(model_comp_long,\n       aes(x = reorder(Model, Value), y = Value, fill = Metric)) +\n  geom_bar(stat = \"identity\", position = \"dodge\") +\n  coord_flip() +\n  labs(title = \"Model Performance Comparison\",\n       x = \"Model\",\n       y = \"R-squared Value\") +\n  theme_minimal() +\n  scale_fill_brewer(palette = \"Set2\")"
+  },
+  {
+    "objectID": "Hands-on_Ex/Hands-on_ex10/ex10a.html#residual-analysis",
+    "href": "Hands-on_Ex/Hands-on_ex10/ex10a.html#residual-analysis",
+    "title": "Hands-on Exercise 10a: Aspatial Spatial Interaction Models",
+    "section": "6.2 Residual Analysis",
+    "text": "6.2 Residual Analysis\n\n# Prepare residuals\nmodels &lt;- list(\n  \"Unconstrained\" = uncSIM,\n  \"Origin-Constrained\" = orcSIM,\n  \"Destination-Constrained\" = decSIM,\n  \"Doubly-Constrained\" = dbcSIM\n)\n\n# Create residual plots\npar(mfrow = c(2, 2))\nfor(name in names(models)) {\n  plot(fitted(models[[name]]), residuals(models[[name]]),\n       main = paste(name, \"Model\"),\n       xlab = \"Fitted Values\",\n       ylab = \"Residuals\",\n       pch = 20, col = rgb(0, 0, 1, 0.3))\n  abline(h = 0, col = \"red\", lty = 2)\n}\n\n\n\n\n\n\n\npar(mfrow = c(1, 1))"
+  },
+  {
+    "objectID": "Hands-on_Ex/Hands-on_ex10/ex10a.html#prediction-comparison",
+    "href": "Hands-on_Ex/Hands-on_ex10/ex10a.html#prediction-comparison",
+    "title": "Hands-on Exercise 10a: Aspatial Spatial Interaction Models",
+    "section": "6.3 Prediction Comparison",
+    "text": "6.3 Prediction Comparison\n\n# Compare predictions from unconstrained and doubly-constrained models\nSIM_data_model &lt;- SIM_data_model %&gt;%\n  mutate(\n    pred_unc = exp(fitted(uncSIM)),\n    pred_dbc = exp(fitted(dbcSIM)),\n    actual = TRIPS\n  )\n\n# Scatter plots\np1 &lt;- ggplot(SIM_data_model,\n             aes(x = actual, y = pred_unc)) +\n  geom_point(alpha = 0.3, size = 0.8, color = \"blue\") +\n  geom_abline(intercept = 0, slope = 1, color = \"red\", linetype = \"dashed\") +\n  scale_x_log10() +\n  scale_y_log10() +\n  labs(title = \"Unconstrained Model\",\n       x = \"Actual Trips (log scale)\",\n       y = \"Predicted Trips (log scale)\") +\n  theme_minimal()\n\np2 &lt;- ggplot(SIM_data_model,\n             aes(x = actual, y = pred_dbc)) +\n  geom_point(alpha = 0.3, size = 0.8, color = \"green\") +\n  geom_abline(intercept = 0, slope = 1, color = \"red\", linetype = \"dashed\") +\n  scale_x_log10() +\n  scale_y_log10() +\n  labs(title = \"Doubly-Constrained Model\",\n       x = \"Actual Trips (log scale)\",\n       y = \"Predicted Trips (log scale)\") +\n  theme_minimal()\n\nggarrange(p1, p2, ncol = 2)\n\n\n\n\n\n\n\n# Calculate prediction metrics\ncalc_metrics &lt;- function(actual, predicted) {\n  rmse &lt;- sqrt(mean((actual - predicted)^2))\n  mae &lt;- mean(abs(actual - predicted))\n  mape &lt;- mean(abs((actual - predicted) / actual)) * 100\n  return(c(RMSE = rmse, MAE = mae, MAPE = mape))\n}\n\nmetrics_unc &lt;- calc_metrics(SIM_data_model$actual, SIM_data_model$pred_unc)\nmetrics_dbc &lt;- calc_metrics(SIM_data_model$actual, SIM_data_model$pred_dbc)\n\nmetrics_table &lt;- data.frame(\n  Model = c(\"Unconstrained\", \"Doubly-Constrained\"),\n  RMSE = c(metrics_unc[\"RMSE\"], metrics_dbc[\"RMSE\"]),\n  MAE = c(metrics_unc[\"MAE\"], metrics_dbc[\"MAE\"]),\n  MAPE = c(metrics_unc[\"MAPE\"], metrics_dbc[\"MAPE\"])\n)\n\nkable(metrics_table,\n      digits = 2,\n      caption = \"Prediction Error Metrics\")\n\n\nPrediction Error Metrics\n\n\nModel\nRMSE\nMAE\nMAPE\n\n\n\n\nUnconstrained\n6.20\n1.37\n38.54\n\n\nDoubly-Constrained\n5.82\n1.27\n35.74"
+  },
+  {
+    "objectID": "Hands-on_Ex/Hands-on_ex10/ex10a.html#flow-maps",
+    "href": "Hands-on_Ex/Hands-on_ex10/ex10a.html#flow-maps",
+    "title": "Hands-on Exercise 10a: Aspatial Spatial Interaction Models",
+    "section": "7.1 Flow Maps",
+    "text": "7.1 Flow Maps\n\n# Select top 50 flows for visualization\ntop_flows &lt;- SIM_data %&gt;%\n  arrange(desc(TRIPS)) %&gt;%\n  head(50)\n\n# Get coordinates for flow lines\norigin_coords &lt;- centroids %&gt;%\n  filter(SUBZONE_C %in% top_flows$ORIGIN_SZ) %&gt;%\n  st_coordinates() %&gt;%\n  as.data.frame() %&gt;%\n  mutate(ORIGIN_SZ = centroids$SUBZONE_C[centroids$SUBZONE_C %in% top_flows$ORIGIN_SZ])\n\ndest_coords &lt;- centroids %&gt;%\n  filter(SUBZONE_C %in% top_flows$DESTIN_SZ) %&gt;%\n  st_coordinates() %&gt;%\n  as.data.frame() %&gt;%\n  mutate(DESTIN_SZ = centroids$SUBZONE_C[centroids$SUBZONE_C %in% top_flows$DESTIN_SZ])\n\n# Create flow lines\nflow_lines &lt;- top_flows %&gt;%\n  left_join(origin_coords, by = \"ORIGIN_SZ\") %&gt;%\n  rename(o_X = X, o_Y = Y) %&gt;%\n  left_join(dest_coords, by = \"DESTIN_SZ\") %&gt;%\n  rename(d_X = X, d_Y = Y)\n\n# Function to create line\ncreate_line &lt;- function(row) {\n  if(!is.na(row$o_X) && !is.na(row$d_X)) {\n    coords &lt;- matrix(c(row$o_X, row$o_Y, row$d_X, row$d_Y),\n                     ncol = 2, byrow = TRUE)\n    st_linestring(coords)\n  } else {\n    NULL\n  }\n}\n\n# Create sf object with lines\nflow_sf &lt;- flow_lines %&gt;%\n  filter(!is.na(o_X) & !is.na(d_X)) %&gt;%\n  rowwise() %&gt;%\n  mutate(geometry = list(create_line(cur_data()))) %&gt;%\n  ungroup() %&gt;%\n  st_as_sf() %&gt;%\n  st_set_crs(3414)\n\n# Map\ntm_shape(mpsz) +\n  tm_polygons(col = \"grey90\",\n              border.col = \"grey50\",\n              lwd = 0.5) +\ntm_shape(flow_sf) +\n  tm_lines(col = \"TRIPS\",\n           lwd = \"TRIPS\",\n           scale = 5,\n           style = \"quantile\",\n           palette = \"YlOrRd\",\n           alpha = 0.6,\n           title.col = \"Trip Volume\",\n           title.lwd = \"Flow Volume\",\n           legend.lwd.show = FALSE) +\n  tm_layout(main.title = \"Top 50 Origin-Destination Flows\",\n            main.title.size = 1.2,\n            legend.position = c(\"right\", \"bottom\"),\n            frame = FALSE)"
+  },
+  {
+    "objectID": "Hands-on_Ex/Hands-on_ex10/ex10a.html#distance-decay-curves",
+    "href": "Hands-on_Ex/Hands-on_ex10/ex10a.html#distance-decay-curves",
+    "title": "Hands-on Exercise 10a: Aspatial Spatial Interaction Models",
+    "section": "7.2 Distance Decay Curves",
+    "text": "7.2 Distance Decay Curves\n\n# Extract distance decay parameters\nmodels_beta &lt;- data.frame(\n  Model = c(\"Unconstrained\", \"Origin-Constrained\", \n            \"Destination-Constrained\", \"Doubly-Constrained\"),\n  Beta = c(-coef(uncSIM)[\"log_DIST\"],\n           -coef(orcSIM)[\"log_DIST\"],\n           -coef(decSIM)[\"log_DIST\"],\n           -coef(dbcSIM)[\"log_DIST\"])\n)\n\n# Create distance decay curves\ndist_seq &lt;- seq(0.5, 50, by = 0.5)  # Distance in km\ndecay_curves &lt;- data.frame(Distance = dist_seq)\n\nfor(i in 1:nrow(models_beta)) {\n  decay_curves[[models_beta$Model[i]]] &lt;- exp(-models_beta$Beta[i] * log(dist_seq))\n}\n\n# Reshape for plotting\ndecay_long &lt;- decay_curves %&gt;%\n  pivot_longer(cols = -Distance,\n               names_to = \"Model\",\n               values_to = \"Interaction\")\n\n# Plot\nggplot(decay_long,\n       aes(x = Distance, y = Interaction, color = Model)) +\n  geom_line(size = 1.2) +\n  labs(title = \"Distance Decay Functions by Model Type\",\n       x = \"Distance (km)\",\n       y = \"Relative Interaction Intensity\") +\n  theme_minimal() +\n  scale_color_brewer(palette = \"Set1\") +\n  theme(legend.position = \"bottom\")"
+  },
+  {
+    "objectID": "Hands-on_Ex/Hands-on_ex10/ex10a.html#interactive-visualization",
+    "href": "Hands-on_Ex/Hands-on_ex10/ex10a.html#interactive-visualization",
+    "title": "Hands-on Exercise 10a: Aspatial Spatial Interaction Models",
+    "section": "7.3 Interactive Visualization",
+    "text": "7.3 Interactive Visualization\n\n# Create interactive plot\nlibrary(plotly)\n\n# Sample data for performance\nplot_data &lt;- SIM_data_model %&gt;%\n  sample_n(min(1000, nrow(.)))\n\np &lt;- plot_ly(data = plot_data,\n             x = ~dist/1000,\n             y = ~TRIPS,\n             color = ~log(DESTIN_AGE25_64),\n             size = ~ORIGIN_AGE25_64,\n             text = ~paste(\"Origin:\", ORIGIN_SZ,\n                          \"&lt;br&gt;Destination:\", DESTIN_SZ,\n                          \"&lt;br&gt;Trips:\", TRIPS,\n                          \"&lt;br&gt;Distance:\", round(dist/1000, 1), \"km\",\n                          \"&lt;br&gt;Origin Working Pop:\", ORIGIN_AGE25_64,\n                          \"&lt;br&gt;Dest Working Pop:\", DESTIN_AGE25_64),\n             type = 'scatter',\n             mode = 'markers',\n             marker = list(sizemode = 'diameter',\n                          opacity = 0.5),\n             hoverinfo = 'text') %&gt;%\n  layout(title = \"Interactive Flow Visualization\",\n         xaxis = list(title = \"Distance (km)\",\n                     type = \"log\"),\n         yaxis = list(title = \"Trips\",\n                     type = \"log\"),\n         showlegend = FALSE)\n\np"
+  },
+  {
+    "objectID": "Hands-on_Ex/Hands-on_ex10/ex10a.html#summary-of-results",
+    "href": "Hands-on_Ex/Hands-on_ex10/ex10a.html#summary-of-results",
+    "title": "Hands-on Exercise 10a: Aspatial Spatial Interaction Models",
+    "section": "8.1 Summary of Results",
+    "text": "8.1 Summary of Results\n\n# Extract key parameters from best models\nkey_params &lt;- data.frame(\n  Parameter = c(\"Distance Decay (Unconstrained)\",\n                \"Distance Decay (Doubly-Constrained)\",\n                \"Origin Working Pop Elasticity\",\n                \"Destination Working Pop Elasticity\"),\n  Value = c(round(-coef(uncSIM)[\"log_DIST\"], 3),\n            round(-coef(dbcSIM)[\"log_DIST\"], 3),\n            round(coef(uncSIM)[\"log_ORIG_WORK\"], 3),\n            round(coef(uncSIM)[\"log_DEST_WORK\"], 3)),\n  Interpretation = c(\n    \"1% increase in distance reduces flow by this %\",\n    \"Distance effect when controlling for zone sizes\",\n    \"1% increase in origin working pop increases flow by this %\",\n    \"1% increase in destination working pop increases flow by this %\"\n  )\n)\n\nkable(key_params,\n      caption = \"Key Model Parameters and Their Interpretations\")\n\n\nKey Model Parameters and Their Interpretations\n\n\n\n\n\n\n\nParameter\nValue\nInterpretation\n\n\n\n\nDistance Decay (Unconstrained)\n1.032\n1% increase in distance reduces flow by this %\n\n\nDistance Decay (Doubly-Constrained)\n1.071\nDistance effect when controlling for zone sizes\n\n\nOrigin Working Pop Elasticity\n0.653\n1% increase in origin working pop increases flow by this %\n\n\nDestination Working Pop Elasticity\n0.647\n1% increase in destination working pop increases flow by this %"
+  },
+  {
+    "objectID": "Hands-on_Ex/Hands-on_ex10/ex10a.html#model-selection-guidance",
+    "href": "Hands-on_Ex/Hands-on_ex10/ex10a.html#model-selection-guidance",
+    "title": "Hands-on Exercise 10a: Aspatial Spatial Interaction Models",
+    "section": "8.2 Model Selection Guidance",
+    "text": "8.2 Model Selection Guidance\n\ncat(\"Model Selection Recommendations:\\n\")\n\nModel Selection Recommendations:\n\ncat(strrep(\"=\", 50), \"\\n\\n\")  # 修正：使用 strrep 而不是 * \n\n================================================== \n\n# Best model by criterion\nbest_r2 &lt;- model_comparison$Model[which.max(model_comparison$R2)]\nbest_aic &lt;- model_comparison$Model[which.min(model_comparison$AIC)]\n\ncat(\"1. Highest R-squared:\", best_r2, \n    \"(R² =\", round(max(model_comparison$R2), 3), \")\\n\")\n\n1. Highest R-squared: Doubly-Constrained (R² = 0.723 )\n\ncat(\"2. Lowest AIC:\", best_aic,\n    \"(AIC =\", round(min(model_comparison$AIC), 0), \")\\n\\n\")\n\n2. Lowest AIC: Destination-Constrained (AIC = 42112 )\n\ncat(\"Practical Recommendations:\\n\")\n\nPractical Recommendations:\n\ncat(\"- For understanding general patterns: Use Unconstrained Model\\n\")\n\n- For understanding general patterns: Use Unconstrained Model\n\ncat(\"- For trip generation studies: Use Origin-Constrained Model\\n\")\n\n- For trip generation studies: Use Origin-Constrained Model\n\ncat(\"- For destination choice: Use Destination-Constrained Model\\n\")\n\n- For destination choice: Use Destination-Constrained Model\n\ncat(\"- For fixed trip matrices: Use Doubly-Constrained Model\\n\")\n\n- For fixed trip matrices: Use Doubly-Constrained Model\n\ncat(\"- For policy analysis: Include demographic variables\\n\")\n\n- For policy analysis: Include demographic variables"
+  },
+  {
+    "objectID": "Hands-on_Ex/Hands-on_ex10/ex10a.html#key-insights",
+    "href": "Hands-on_Ex/Hands-on_ex10/ex10a.html#key-insights",
+    "title": "Hands-on Exercise 10a: Aspatial Spatial Interaction Models",
+    "section": "9.1 Key Insights",
+    "text": "9.1 Key Insights\nThis analysis of spatial interaction models reveals:\n\nStrong Distance Decay: Distance is consistently the strongest predictor of interaction flows\nConstraint Effects: Adding constraints significantly improves model fit, with doubly-constrained models achieving the highest R²\nDemographic Influences: Working-age population is the key demographic driver of flows\nModel Trade-offs:\n\nUnconstrained models: Most interpretable but lowest fit\nConstrained models: Better fit but less generalizable\nEnhanced models: Balance between fit and interpretability"
+  },
+  {
+    "objectID": "Hands-on_Ex/Hands-on_ex10/ex10a.html#applications",
+    "href": "Hands-on_Ex/Hands-on_ex10/ex10a.html#applications",
+    "title": "Hands-on Exercise 10a: Aspatial Spatial Interaction Models",
+    "section": "9.2 Applications",
+    "text": "9.2 Applications\nThese models can inform: - Transport Planning: Predict traffic flows for new infrastructure - Service Location: Optimize facility placement - Urban Development: Understand and predict movement patterns - Policy Analysis: Evaluate impacts of demographic changes"
+  },
+  {
+    "objectID": "Hands-on_Ex/Hands-on_ex10/ex10a.html#data-export-for-exercise-10b",
+    "href": "Hands-on_Ex/Hands-on_ex10/ex10a.html#data-export-for-exercise-10b",
+    "title": "Hands-on Exercise 10a: Aspatial Spatial Interaction Models",
+    "section": "9.3 Data Export for Exercise 10b",
+    "text": "9.3 Data Export for Exercise 10b\n\n# Ensure data is saved for next exercise\ncat(\"Data exported for Exercise 10b:\\n\")\n\nData exported for Exercise 10b:\n\ncat(\"- SIM_data saved to: data/rds/SIM_data.rds\\n\")\n\n- SIM_data saved to: data/rds/SIM_data.rds\n\ncat(\"- Number of OD pairs:\", nrow(SIM_data), \"\\n\")\n\n- Number of OD pairs: 104006 \n\ncat(\"- Variables included:\", paste(names(SIM_data), collapse = \", \"), \"\\n\")\n\n- Variables included: ORIGIN_SZ, DESTIN_SZ, dist, TRIPS, ORIGIN_AGE7_12, ORIGIN_AGE13_24, ORIGIN_AGE25_64, DESTIN_AGE7_12, DESTIN_AGE13_24, DESTIN_AGE25_64"
+  },
+  {
+    "objectID": "Hands-on_Ex/Hands-on_ex10/ex10a.html#next-steps",
+    "href": "Hands-on_Ex/Hands-on_ex10/ex10a.html#next-steps",
+    "title": "Hands-on Exercise 10a: Aspatial Spatial Interaction Models",
+    "section": "9.4 Next Steps",
+    "text": "9.4 Next Steps\nIn Exercise 10b, we will: - Account for spatial autocorrelation in flows - Apply spatial econometric models using the spflow package - Compare aspatial vs spatial model performance - Explore network effects and spatial spillovers\n\nEnd of Exercise 10a: Aspatial Spatial Interaction Models"
+  },
+  {
+    "objectID": "Hands-on_Ex/Hands-on_ex10/data/geospatial/ELDERCARE.html",
+    "href": "Hands-on_Ex/Hands-on_ex10/data/geospatial/ELDERCARE.html",
+    "title": "ISSS626 Portfolio — HUANG PENGXIN",
+    "section": "",
+    "text": "&lt;!DOCTYPE qgis PUBLIC ‘http://mrcc.com/qgis.dtd’ ‘SYSTEM’&gt;  ELDERCARE  ENG dataset\n\nELDERCARE\n\n                 0 0     false"
+  },
+  {
     "objectID": "Hands-on_Ex/Hands-on_ex09/data/geospatial/hexagons.html",
     "href": "Hands-on_Ex/Hands-on_ex09/data/geospatial/hexagons.html",
     "title": "ISSS626 Portfolio — HUANG PENGXIN",
@@ -1167,5 +1405,222 @@
     "title": "Hands-on Exercise 09: Spatial Accessibility Analysis and GWR Method",
     "section": "14. Notes on Data Requirements",
     "text": "14. Notes on Data Requirements\nFor a complete hedonic pricing analysis, you would need:\n\nProperty Transaction Data with:\n\nSelling prices\nProperty characteristics (area, age, type)\nExact locations (coordinates)\nTransaction dates\n\nProximity Variables:\n\nDistance to amenities\nAccessibility indices\nNeighborhood characteristics\n\nSpatial Data:\n\nAdministrative boundaries\nTransportation networks\nLand use patterns\n\n\nThe OD matrix can be used to calculate sophisticated accessibility measures that can be incorporated as variables in the hedonic pricing model."
+  },
+  {
+    "objectID": "Hands-on_Ex/Hands-on_ex10/data/geospatial/hexagons.html",
+    "href": "Hands-on_Ex/Hands-on_ex10/data/geospatial/hexagons.html",
+    "title": "ISSS626 Portfolio — HUANG PENGXIN",
+    "section": "",
+    "text": "&lt;!DOCTYPE qgis PUBLIC ‘http://mrcc.com/qgis.dtd’ ‘SYSTEM’&gt;     dataset\n\n\n                 0 0     false"
+  },
+  {
+    "objectID": "Hands-on_Ex/Hands-on_ex10/ex10b.html",
+    "href": "Hands-on_Ex/Hands-on_ex10/ex10b.html",
+    "title": "Hands-on Exercise 10b: Spatial Spatial Interaction Models",
+    "section": "",
+    "text": "Building upon Exercise 10a’s aspatial models, this exercise introduces spatial econometric approaches to spatial interaction modeling. We will use spatial regression methods to account for spatial autocorrelation and network effects in Origin-Destination flows.\n\n\n\nBy the end of this exercise, you will be able to:\n\nUnderstand spatial dependencies in OD flow data\nBuild spatial econometric interaction models\nAccount for origin, destination, and spatial effects\nCompare spatial vs aspatial model performance\nInterpret spatial spillover effects\n\n\n\n\nWhy Spatial Models for Flows? - Flows from nearby origins may be correlated (origin dependence) - Flows to nearby destinations may be correlated (destination dependence)\n- Flows between nearby OD pairs may be correlated (network dependence) - Ignoring these dependencies leads to biased estimates"
+  },
+  {
+    "objectID": "Hands-on_Ex/Hands-on_ex10/ex10b.html#introduction",
+    "href": "Hands-on_Ex/Hands-on_ex10/ex10b.html#introduction",
+    "title": "Hands-on Exercise 10b: Spatial Spatial Interaction Models",
+    "section": "",
+    "text": "Building upon Exercise 10a’s aspatial models, this exercise introduces spatial econometric approaches to spatial interaction modeling. We will use spatial regression methods to account for spatial autocorrelation and network effects in Origin-Destination flows."
+  },
+  {
+    "objectID": "Hands-on_Ex/Hands-on_ex10/ex10b.html#learning-objectives",
+    "href": "Hands-on_Ex/Hands-on_ex10/ex10b.html#learning-objectives",
+    "title": "Hands-on Exercise 10b: Spatial Spatial Interaction Models",
+    "section": "",
+    "text": "By the end of this exercise, you will be able to:\n\nUnderstand spatial dependencies in OD flow data\nBuild spatial econometric interaction models\nAccount for origin, destination, and spatial effects\nCompare spatial vs aspatial model performance\nInterpret spatial spillover effects"
+  },
+  {
+    "objectID": "Hands-on_Ex/Hands-on_ex10/ex10b.html#key-concepts",
+    "href": "Hands-on_Ex/Hands-on_ex10/ex10b.html#key-concepts",
+    "title": "Hands-on Exercise 10b: Spatial Spatial Interaction Models",
+    "section": "",
+    "text": "Why Spatial Models for Flows? - Flows from nearby origins may be correlated (origin dependence) - Flows to nearby destinations may be correlated (destination dependence)\n- Flows between nearby OD pairs may be correlated (network dependence) - Ignoring these dependencies leads to biased estimates"
+  },
+  {
+    "objectID": "Hands-on_Ex/Hands-on_ex10/ex10b.html#loading-required-packages",
+    "href": "Hands-on_Ex/Hands-on_ex10/ex10b.html#loading-required-packages",
+    "title": "Hands-on Exercise 10b: Spatial Spatial Interaction Models",
+    "section": "2.1 Loading Required Packages",
+    "text": "2.1 Loading Required Packages\n\npacman::p_load(spatialreg, tidyverse, sf, spdep, \n               tmap, Matrix, igraph, MASS,\n               knitr, ggpubr, corrplot)"
+  },
+  {
+    "objectID": "Hands-on_Ex/Hands-on_ex10/ex10b.html#setting-up-environment",
+    "href": "Hands-on_Ex/Hands-on_ex10/ex10b.html#setting-up-environment",
+    "title": "Hands-on Exercise 10b: Spatial Spatial Interaction Models",
+    "section": "2.2 Setting Up Environment",
+    "text": "2.2 Setting Up Environment\n\n# Set tmap mode\ntmap_mode(\"plot\")\n\n# Set seed for reproducibility\nset.seed(1234)\n\n# Set number formatting\noptions(scipen = 999)\noptions(digits = 4)"
+  },
+  {
+    "objectID": "Hands-on_Ex/Hands-on_ex10/ex10b.html#load-data-from-exercise-10a",
+    "href": "Hands-on_Ex/Hands-on_ex10/ex10b.html#load-data-from-exercise-10a",
+    "title": "Hands-on Exercise 10b: Spatial Spatial Interaction Models",
+    "section": "3.1 Load Data from Exercise 10a",
+    "text": "3.1 Load Data from Exercise 10a\n\n# Load the SIM_data prepared in Exercise 10a\nSIM_data &lt;- read_rds(\"data/rds/SIM_data.rds\")\n\ncat(\"SIM_data loaded successfully!\\n\")\n\nSIM_data loaded successfully!\n\ncat(\"Dimensions:\", dim(SIM_data), \"\\n\")\n\nDimensions: 104006 10 \n\ncat(\"Total flows:\", sum(SIM_data$TRIPS), \"\\n\")\n\nTotal flows: 107448 \n\n# Display structure\nglimpse(SIM_data)\n\nRows: 104,006\nColumns: 10\n$ ORIGIN_SZ       &lt;chr&gt; \"BMSZ02\", \"OTSZ03\", \"DTSZ04\", \"DTSZ05\", \"OTSZ04\", \"BMS…\n$ DESTIN_SZ       &lt;chr&gt; \"OTSZ02\", \"OTSZ02\", \"OTSZ02\", \"OTSZ02\", \"OTSZ02\", \"OTS…\n$ dist            &lt;dbl&gt; 2471.2, 415.0, 933.4, 1147.1, 714.8, 1060.0, 1977.6, 1…\n$ TRIPS           &lt;dbl&gt; 2, 48, 1, 4, 8, 1, 1, 2, 4, 1, 32, 3, 0, 1, 4, 3, 1, 1…\n$ ORIGIN_AGE7_12  &lt;dbl&gt; 1762.0, 1899.0, 2194.0, 1013.0, 3324.0, 219.8, 1859.2,…\n$ ORIGIN_AGE13_24 &lt;dbl&gt; 6299, 4194, 6309, 2047, 5557, 293, 2479, 1529, 4168, 6…\n$ ORIGIN_AGE25_64 &lt;dbl&gt; 18896, 18512, 594, 23207, 6407, 879, 7437, 7531, 15719…\n$ DESTIN_AGE7_12  &lt;dbl&gt; 851, 851, 851, 851, 851, 851, 851, 851, 851, 851, 851,…\n$ DESTIN_AGE13_24 &lt;dbl&gt; 644, 644, 644, 644, 644, 644, 644, 644, 644, 644, 644,…\n$ DESTIN_AGE25_64 &lt;dbl&gt; 3943, 3943, 3943, 3943, 3943, 3943, 3943, 3943, 3943, …"
+  },
+  {
+    "objectID": "Hands-on_Ex/Hands-on_ex10/ex10b.html#load-spatial-data",
+    "href": "Hands-on_Ex/Hands-on_ex10/ex10b.html#load-spatial-data",
+    "title": "Hands-on Exercise 10b: Spatial Spatial Interaction Models",
+    "section": "3.2 Load Spatial Data",
+    "text": "3.2 Load Spatial Data\n\n# Load planning subzones\nmpsz &lt;- st_read(dsn = \"data/geospatial\",\n                layer = \"MP14_SUBZONE_NO_SEA_PL\",\n                quiet = TRUE) %&gt;%\n  st_transform(crs = 3414)\n\ncat(\"Number of zones:\", nrow(mpsz), \"\\n\")\n\nNumber of zones: 323 \n\n# Get zone centroids for later use\ncentroids &lt;- st_centroid(mpsz)"
+  },
+  {
+    "objectID": "Hands-on_Ex/Hands-on_ex10/ex10b.html#prepare-zone-attributes",
+    "href": "Hands-on_Ex/Hands-on_ex10/ex10b.html#prepare-zone-attributes",
+    "title": "Hands-on Exercise 10b: Spatial Spatial Interaction Models",
+    "section": "3.3 Prepare Zone Attributes",
+    "text": "3.3 Prepare Zone Attributes\n\n# 明确使用dplyr的函数\nzones &lt;- SIM_data %&gt;%\n  dplyr::select(ORIGIN_SZ, ORIGIN_AGE7_12, ORIGIN_AGE13_24, ORIGIN_AGE25_64) %&gt;%\n  dplyr::rename(\n    SUBZONE_C = ORIGIN_SZ,\n    AGE7_12 = ORIGIN_AGE7_12,\n    AGE13_24 = ORIGIN_AGE13_24, \n    AGE25_64 = ORIGIN_AGE25_64\n  ) %&gt;%\n  dplyr::distinct()\n\n# Join with spatial data\nzones_sf &lt;- mpsz %&gt;%\n  dplyr::select(SUBZONE_C, geometry) %&gt;%\n  dplyr::left_join(zones, by = \"SUBZONE_C\") %&gt;%\n  dplyr::filter(!is.na(AGE25_64))\n\ncat(\"Number of zones with data:\", nrow(zones_sf), \"\\n\")\n\nNumber of zones with data: 323"
+  },
+  {
+    "objectID": "Hands-on_Ex/Hands-on_ex10/ex10b.html#contiguity-based-weights",
+    "href": "Hands-on_Ex/Hands-on_ex10/ex10b.html#contiguity-based-weights",
+    "title": "Hands-on Exercise 10b: Spatial Spatial Interaction Models",
+    "section": "4.1 Contiguity-Based Weights",
+    "text": "4.1 Contiguity-Based Weights\n\n# Create contiguity weights (Queen)\nnb_queen &lt;- poly2nb(zones_sf, queen = TRUE)\nsummary(nb_queen)\n\nNeighbour list object:\nNumber of regions: 323 \nNumber of nonzero links: 1940 \nPercentage nonzero weights: 1.86 \nAverage number of links: 6.006 \n5 regions with no links:\n36, 37, 38, 276, 298\n6 disjoint connected subgraphs\nLink number distribution:\n\n 0  1  2  3  4  5  6  7  8  9 10 11 12 14 17 \n 5  2  6 10 26 76 85 53 34 17  3  3  1  1  1 \n2 least connected regions:\n35 198 with 1 link\n1 most connected region:\n296 with 17 links\n\n# Convert to listw object\nlw_queen &lt;- nb2listw(nb_queen, style = \"W\", zero.policy = TRUE)\n\n# Visualize neighbor structure\nplot(st_geometry(zones_sf), border = \"grey\")\nplot(nb_queen, st_coordinates(st_centroid(zones_sf)), \n     add = TRUE, col = \"red\", lwd = 0.5)\ntitle(\"Queen Contiguity Neighbors\")"
+  },
+  {
+    "objectID": "Hands-on_Ex/Hands-on_ex10/ex10b.html#distance-based-weights",
+    "href": "Hands-on_Ex/Hands-on_ex10/ex10b.html#distance-based-weights",
+    "title": "Hands-on Exercise 10b: Spatial Spatial Interaction Models",
+    "section": "4.2 Distance-Based Weights",
+    "text": "4.2 Distance-Based Weights\n\n# K-nearest neighbors\ncoords &lt;- st_coordinates(st_centroid(zones_sf))\nknn8 &lt;- knn2nb(knearneigh(coords, k = 8))\nlw_knn8 &lt;- nb2listw(knn8, style = \"W\")\n\n# Distance threshold\ndist_threshold &lt;- 5000  # 5km\ndnb &lt;- dnearneigh(coords, 0, dist_threshold)\nlw_dist &lt;- nb2listw(dnb, style = \"W\", zero.policy = TRUE)\n\ncat(\"Average number of neighbors:\\n\")\n\nAverage number of neighbors:\n\ncat(\"- Queen contiguity:\", mean(card(nb_queen)), \"\\n\")\n\n- Queen contiguity: 6.006 \n\ncat(\"- 8-NN:\", mean(card(knn8)), \"\\n\")\n\n- 8-NN: 8 \n\ncat(\"- Distance (5km):\", mean(card(dnb)), \"\\n\")\n\n- Distance (5km): 48.85"
+  },
+  {
+    "objectID": "Hands-on_Ex/Hands-on_ex10/ex10b.html#spatial-autocorrelation-in-flows",
+    "href": "Hands-on_Ex/Hands-on_ex10/ex10b.html#spatial-autocorrelation-in-flows",
+    "title": "Hands-on Exercise 10b: Spatial Spatial Interaction Models",
+    "section": "5.1 Spatial Autocorrelation in Flows",
+    "text": "5.1 Spatial Autocorrelation in Flows\n\n# Calculate total outflows and inflows per zone\noutflows &lt;- SIM_data %&gt;%\n  group_by(ORIGIN_SZ) %&gt;%\n  summarise(total_outflow = sum(TRIPS))\n\ninflows &lt;- SIM_data %&gt;%\n  group_by(DESTIN_SZ) %&gt;%\n  summarise(total_inflow = sum(TRIPS))\n\n# Join with spatial data\nzones_flow &lt;- zones_sf %&gt;%\n  left_join(outflows, by = c(\"SUBZONE_C\" = \"ORIGIN_SZ\")) %&gt;%\n  left_join(inflows, by = c(\"SUBZONE_C\" = \"DESTIN_SZ\")) %&gt;%\n  mutate(\n    total_outflow = replace_na(total_outflow, 0),\n    total_inflow = replace_na(total_inflow, 0),\n    net_flow = total_inflow - total_outflow\n  )"
+  },
+  {
+    "objectID": "Hands-on_Ex/Hands-on_ex10/ex10b.html#morans-i-for-flows",
+    "href": "Hands-on_Ex/Hands-on_ex10/ex10b.html#morans-i-for-flows",
+    "title": "Hands-on Exercise 10b: Spatial Spatial Interaction Models",
+    "section": "5.2 Moran’s I for Flows",
+    "text": "5.2 Moran’s I for Flows\n\n# Test for spatial autocorrelation in outflows\nmoran_out &lt;- moran.test(zones_flow$total_outflow, lw_knn8)\ncat(\"Moran's I for Outflows:\\n\")\n\nMoran's I for Outflows:\n\nprint(moran_out)\n\n\n    Moran I test under randomisation\n\ndata:  zones_flow$total_outflow  \nweights: lw_knn8    \n\nMoran I statistic standard deviate = 7.4, p-value = 0.00000000000006\nalternative hypothesis: greater\nsample estimates:\nMoran I statistic       Expectation          Variance \n        0.1889452        -0.0031056         0.0006688 \n\n# Test for spatial autocorrelation in inflows  \nmoran_in &lt;- moran.test(zones_flow$total_inflow, lw_knn8)\ncat(\"\\nMoran's I for Inflows:\\n\")\n\n\nMoran's I for Inflows:\n\nprint(moran_in)\n\n\n    Moran I test under randomisation\n\ndata:  zones_flow$total_inflow  \nweights: lw_knn8    \n\nMoran I statistic standard deviate = 8, p-value = 0.0000000000000005\nalternative hypothesis: greater\nsample estimates:\nMoran I statistic       Expectation          Variance \n        0.2039645        -0.0031056         0.0006674 \n\n# Moran scatterplots\npar(mfrow = c(1, 2))\nmoran.plot(zones_flow$total_outflow, lw_knn8,\n           main = \"Outflows\", \n           xlab = \"Total Outflow\",\n           ylab = \"Lagged Outflow\",\n           labels = FALSE)\nmoran.plot(zones_flow$total_inflow, lw_knn8,\n           main = \"Inflows\",\n           xlab = \"Total Inflow\", \n           ylab = \"Lagged Inflow\",\n           labels = FALSE)\n\n\n\n\n\n\n\npar(mfrow = c(1, 1))"
+  },
+  {
+    "objectID": "Hands-on_Ex/Hands-on_ex10/ex10b.html#visualize-flow-patterns",
+    "href": "Hands-on_Ex/Hands-on_ex10/ex10b.html#visualize-flow-patterns",
+    "title": "Hands-on Exercise 10b: Spatial Spatial Interaction Models",
+    "section": "5.3 Visualize Flow Patterns",
+    "text": "5.3 Visualize Flow Patterns\n\n# Map outflows and inflows\ntm1 &lt;- tm_shape(zones_flow) +\n  tm_polygons(\"total_outflow\",\n              style = \"quantile\",\n              n = 5,\n              palette = \"Blues\",\n              title = \"Total Outflow\") +\n  tm_layout(main.title = \"Origin Flows\",\n            main.title.size = 1)\n\ntm2 &lt;- tm_shape(zones_flow) +\n  tm_polygons(\"total_inflow\",\n              style = \"quantile\",\n              n = 5,\n              palette = \"Reds\",\n              title = \"Total Inflow\") +\n  tm_layout(main.title = \"Destination Flows\",\n            main.title.size = 1)\n\ntm3 &lt;- tm_shape(zones_flow) +\n  tm_polygons(\"net_flow\",\n              style = \"quantile\",\n              n = 5,\n              palette = \"-RdBu\",\n              title = \"Net Flow\") +\n  tm_layout(main.title = \"Net Flows (In - Out)\",\n            main.title.size = 1)\n\ntmap_arrange(tm1, tm2, tm3, ncol = 3)"
+  },
+  {
+    "objectID": "Hands-on_Ex/Hands-on_ex10/ex10b.html#prepare-modeling-data",
+    "href": "Hands-on_Ex/Hands-on_ex10/ex10b.html#prepare-modeling-data",
+    "title": "Hands-on Exercise 10b: Spatial Spatial Interaction Models",
+    "section": "6.1 Prepare Modeling Data",
+    "text": "6.1 Prepare Modeling Data\n\n# Aggregate OD flows to zone level for spatial modeling\nzone_flows &lt;- SIM_data %&gt;%\n  group_by(ORIGIN_SZ) %&gt;%\n  summarise(\n    total_outflow = sum(TRIPS),\n    avg_distance = mean(dist, na.rm = TRUE),\n    total_destinations = n_distinct(DESTIN_SZ),\n    working_pop = first(ORIGIN_AGE25_64),\n    young_pop = first(ORIGIN_AGE13_24),\n    school_pop = first(ORIGIN_AGE7_12)\n  ) %&gt;%\n  rename(SUBZONE_C = ORIGIN_SZ)\n\n# Merge with spatial data\nspatial_model_data &lt;- zones_sf %&gt;%\n  left_join(zone_flows, by = \"SUBZONE_C\") %&gt;%\n  filter(!is.na(total_outflow))\n\ncat(\"Number of zones for modeling:\", nrow(spatial_model_data), \"\\n\")\n\nNumber of zones for modeling: 323"
+  },
+  {
+    "objectID": "Hands-on_Ex/Hands-on_ex10/ex10b.html#model-1-ols-baseline",
+    "href": "Hands-on_Ex/Hands-on_ex10/ex10b.html#model-1-ols-baseline",
+    "title": "Hands-on Exercise 10b: Spatial Spatial Interaction Models",
+    "section": "6.2 Model 1: OLS Baseline",
+    "text": "6.2 Model 1: OLS Baseline\n\n# OLS model as baseline\nols_model &lt;- lm(\n  log(total_outflow + 1) ~ \n    log(working_pop + 1) + \n    log(young_pop + 1) + \n    log(avg_distance/1000),\n  data = spatial_model_data\n)\n\nsummary(ols_model)\n\n\nCall:\nlm(formula = log(total_outflow + 1) ~ log(working_pop + 1) + \n    log(young_pop + 1) + log(avg_distance/1000), data = spatial_model_data)\n\nResiduals:\n    Min      1Q  Median      3Q     Max \n-1.4450 -0.2034 -0.0125  0.2071  1.2420 \n\nCoefficients:\n                       Estimate Std. Error t value            Pr(&gt;|t|)    \n(Intercept)             0.89088    0.30502    2.92              0.0037 ** \nlog(working_pop + 1)    1.17906    0.02377   49.61 &lt;0.0000000000000002 ***\nlog(young_pop + 1)     -0.00712    0.02397   -0.30              0.7665    \nlog(avg_distance/1000) -2.43916    0.08964  -27.21 &lt;0.0000000000000002 ***\n---\nSignif. codes:  0 '***' 0.001 '**' 0.01 '*' 0.05 '.' 0.1 ' ' 1\n\nResidual standard error: 0.355 on 319 degrees of freedom\nMultiple R-squared:  0.908, Adjusted R-squared:  0.907 \nF-statistic: 1.05e+03 on 3 and 319 DF,  p-value: &lt;0.0000000000000002\n\n# Test for spatial autocorrelation in residuals\nlm.morantest(ols_model, lw_knn8, alternative = \"two.sided\")\n\n\n    Global Moran I for regression residuals\n\ndata:  \nmodel: lm(formula = log(total_outflow + 1) ~ log(working_pop + 1) +\nlog(young_pop + 1) + log(avg_distance/1000), data = spatial_model_data)\nweights: lw_knn8\n\nMoran I statistic standard deviate = 23, p-value &lt;0.0000000000000002\nalternative hypothesis: two.sided\nsample estimates:\nObserved Moran I      Expectation         Variance \n       0.5950168       -0.0057390        0.0006603"
+  },
+  {
+    "objectID": "Hands-on_Ex/Hands-on_ex10/ex10b.html#model-2-spatial-lag-model-sar",
+    "href": "Hands-on_Ex/Hands-on_ex10/ex10b.html#model-2-spatial-lag-model-sar",
+    "title": "Hands-on Exercise 10b: Spatial Spatial Interaction Models",
+    "section": "6.3 Model 2: Spatial Lag Model (SAR)",
+    "text": "6.3 Model 2: Spatial Lag Model (SAR)\n\n# Spatial Autoregressive Model\nsar_model &lt;- lagsarlm(\n  log(total_outflow + 1) ~ \n    log(working_pop + 1) + \n    log(young_pop + 1) + \n    log(avg_distance/1000),\n  data = spatial_model_data,\n  listw = lw_knn8,\n  zero.policy = TRUE\n)\n\nsummary(sar_model)\n\n\nCall:lagsarlm(formula = log(total_outflow + 1) ~ log(working_pop + \n    1) + log(young_pop + 1) + log(avg_distance/1000), data = spatial_model_data, \n    listw = lw_knn8, zero.policy = TRUE)\n\nResiduals:\n       Min         1Q     Median         3Q        Max \n-1.2759754 -0.1862070  0.0024991  0.1869462  1.0973581 \n\nType: lag \nCoefficients: (asymptotic standard errors) \n                        Estimate Std. Error  z value              Pr(&gt;|z|)\n(Intercept)            -2.480020   0.427555  -5.8005        0.000000006613\nlog(working_pop + 1)    1.198558   0.020919  57.2962 &lt; 0.00000000000000022\nlog(young_pop + 1)     -0.014585   0.021142  -0.6899                0.4903\nlog(avg_distance/1000) -1.900099   0.100351 -18.9346 &lt; 0.00000000000000022\n\nRho: 0.3574, LR test value: 73.84, p-value: &lt; 0.000000000000000222\nAsymptotic standard error: 0.03523\n    z-value: 10.14, p-value: &lt; 0.000000000000000222\nWald statistic: 102.9, p-value: &lt; 0.000000000000000222\n\nLog likelihood: -85.26 for lag model\nML residual variance (sigma squared): 0.09781, (sigma: 0.3127)\nNumber of observations: 323 \nNumber of parameters estimated: 6 \nAIC: 182.5, (AIC for lm: 254.4)\nLM test for residual autocorrelation\ntest value: 350.1, p-value: &lt; 0.000000000000000222\n\n# Extract spatial parameter\ncat(\"\\nSpatial lag parameter (ρ):\", round(sar_model$rho, 4), \"\\n\")\n\n\nSpatial lag parameter (ρ): 0.3574 \n\ncat(\"Interpretation: Neighboring flows have a\", \n    ifelse(sar_model$rho &gt; 0, \"positive\", \"negative\"), \n    \"effect on local flows\\n\")\n\nInterpretation: Neighboring flows have a positive effect on local flows"
+  },
+  {
+    "objectID": "Hands-on_Ex/Hands-on_ex10/ex10b.html#model-3-spatial-error-model-sem",
+    "href": "Hands-on_Ex/Hands-on_ex10/ex10b.html#model-3-spatial-error-model-sem",
+    "title": "Hands-on Exercise 10b: Spatial Spatial Interaction Models",
+    "section": "6.4 Model 3: Spatial Error Model (SEM)",
+    "text": "6.4 Model 3: Spatial Error Model (SEM)\n\n# Spatial Error Model\nsem_model &lt;- errorsarlm(\n  log(total_outflow + 1) ~ \n    log(working_pop + 1) + \n    log(young_pop + 1) + \n    log(avg_distance/1000),\n  data = spatial_model_data,\n  listw = lw_knn8,\n  zero.policy = TRUE\n)\n\nsummary(sem_model)\n\n\nCall:errorsarlm(formula = log(total_outflow + 1) ~ log(working_pop + \n    1) + log(young_pop + 1) + log(avg_distance/1000), data = spatial_model_data, \n    listw = lw_knn8, zero.policy = TRUE)\n\nResiduals:\n      Min        1Q    Median        3Q       Max \n-1.217018 -0.108880  0.017227  0.118694  0.719430 \n\nType: error \nCoefficients: (asymptotic standard errors) \n                         Estimate Std. Error  z value              Pr(&gt;|z|)\n(Intercept)             2.6206032  0.5172669   5.0662          0.0000004057\nlog(working_pop + 1)    1.1745705  0.0133609  87.9111 &lt; 0.00000000000000022\nlog(young_pop + 1)     -0.0033278  0.0140170  -0.2374                0.8123\nlog(avg_distance/1000) -3.2547270  0.1887079 -17.2474 &lt; 0.00000000000000022\n\nLambda: 0.8951, LR test value: 266.3, p-value: &lt; 0.000000000000000222\nAsymptotic standard error: 0.0262\n    z-value: 34.16, p-value: &lt; 0.000000000000000222\nWald statistic: 1167, p-value: &lt; 0.000000000000000222\n\nLog likelihood: 10.96 for error model\nML residual variance (sigma squared): 0.04686, (sigma: 0.2165)\nNumber of observations: 323 \nNumber of parameters estimated: 6 \nAIC: -9.919, (AIC for lm: 254.4)\n\n# Extract spatial parameter\ncat(\"\\nSpatial error parameter (λ):\", round(sem_model$lambda, 4), \"\\n\")\n\n\nSpatial error parameter (λ): 0.8951"
+  },
+  {
+    "objectID": "Hands-on_Ex/Hands-on_ex10/ex10b.html#model-4-spatial-durbin-model-sdm",
+    "href": "Hands-on_Ex/Hands-on_ex10/ex10b.html#model-4-spatial-durbin-model-sdm",
+    "title": "Hands-on Exercise 10b: Spatial Spatial Interaction Models",
+    "section": "6.5 Model 4: Spatial Durbin Model (SDM)",
+    "text": "6.5 Model 4: Spatial Durbin Model (SDM)\n\n# Spatial Durbin Model - includes spatially lagged X variables\nsdm_model &lt;- lagsarlm(\n  log(total_outflow + 1) ~ \n    log(working_pop + 1) + \n    log(young_pop + 1) + \n    log(avg_distance/1000),\n  data = spatial_model_data,\n  listw = lw_knn8,\n  type = \"mixed\",\n  zero.policy = TRUE\n)\n\nsummary(sdm_model)\n\n\nCall:lagsarlm(formula = log(total_outflow + 1) ~ log(working_pop + \n    1) + log(young_pop + 1) + log(avg_distance/1000), data = spatial_model_data, \n    listw = lw_knn8, type = \"mixed\", zero.policy = TRUE)\n\nResiduals:\n      Min        1Q    Median        3Q       Max \n-1.229097 -0.107811  0.014011  0.102320  0.779806 \n\nType: mixed \nCoefficients: (asymptotic standard errors) \n                             Estimate Std. Error  z value             Pr(&gt;|z|)\n(Intercept)                -0.8064084  0.4023914  -2.0040              0.04507\nlog(working_pop + 1)        1.1883882  0.0145620  81.6091 &lt; 0.0000000000000002\nlog(young_pop + 1)         -0.0061501  0.0144665  -0.4251              0.67074\nlog(avg_distance/1000)     -3.7811284  0.2451263 -15.4252 &lt; 0.0000000000000002\nlag.log(working_pop + 1)   -0.9364838  0.0623997 -15.0078 &lt; 0.0000000000000002\nlag.log(young_pop + 1)     -0.0126449  0.0394936  -0.3202              0.74883\nlag.log(avg_distance/1000)  3.5371272  0.2779456  12.7260 &lt; 0.0000000000000002\n\nRho: 0.8668, LR test value: 270.5, p-value: &lt; 0.000000000000000222\nAsymptotic standard error: 0.03027\n    z-value: 28.64, p-value: &lt; 0.000000000000000222\nWald statistic: 820.2, p-value: &lt; 0.000000000000000222\n\nLog likelihood: 18.37 for mixed model\nML residual variance (sigma squared): 0.04553, (sigma: 0.2134)\nNumber of observations: 323 \nNumber of parameters estimated: 9 \nAIC: -18.73, (AIC for lm: 249.8)\nLM test for residual autocorrelation\ntest value: 9.048, p-value: 0.0026301"
+  },
+  {
+    "objectID": "Hands-on_Ex/Hands-on_ex10/ex10b.html#model-5-od-flow-count-models",
+    "href": "Hands-on_Ex/Hands-on_ex10/ex10b.html#model-5-od-flow-count-models",
+    "title": "Hands-on Exercise 10b: Spatial Spatial Interaction Models",
+    "section": "6.6 Model 5: OD Flow Count Models",
+    "text": "6.6 Model 5: OD Flow Count Models\n\n# Sample flows for computational efficiency\nset.seed(1234)\nsample_flows &lt;- SIM_data %&gt;%\n  filter(TRIPS &gt; 0) %&gt;%\n  sample_n(min(5000, n()))\n\n# Poisson regression for count data\npoisson_model &lt;- glm(\n  TRIPS ~ \n    log(ORIGIN_AGE25_64 + 1) + \n    log(DESTIN_AGE25_64 + 1) + \n    log(dist/1000),\n  data = sample_flows,\n  family = poisson()\n)\n\nsummary(poisson_model)\n\n\nCall:\nglm(formula = TRIPS ~ log(ORIGIN_AGE25_64 + 1) + log(DESTIN_AGE25_64 + \n    1) + log(dist/1000), family = poisson(), data = sample_flows)\n\nCoefficients:\n                          Estimate Std. Error z value            Pr(&gt;|z|)    \n(Intercept)              -13.76116    0.20247   -68.0 &lt;0.0000000000000002 ***\nlog(ORIGIN_AGE25_64 + 1)   0.93285    0.01455    64.1 &lt;0.0000000000000002 ***\nlog(DESTIN_AGE25_64 + 1)   0.87001    0.01467    59.3 &lt;0.0000000000000002 ***\nlog(dist/1000)            -1.35807    0.00852  -159.3 &lt;0.0000000000000002 ***\n---\nSignif. codes:  0 '***' 0.001 '**' 0.01 '*' 0.05 '.' 0.1 ' ' 1\n\n(Dispersion parameter for poisson family taken to be 1)\n\n    Null deviance: 26205.5  on 4999  degrees of freedom\nResidual deviance:  4348.4  on 4996  degrees of freedom\nAIC: 16900\n\nNumber of Fisher Scoring iterations: 4\n\n# Negative binomial for overdispersion\nnb_model &lt;- glm.nb(\n  TRIPS ~ \n    log(ORIGIN_AGE25_64 + 1) + \n    log(DESTIN_AGE25_64 + 1) + \n    log(dist/1000),\n  data = sample_flows\n)\n\nsummary(nb_model)\n\n\nCall:\nglm.nb(formula = TRIPS ~ log(ORIGIN_AGE25_64 + 1) + log(DESTIN_AGE25_64 + \n    1) + log(dist/1000), data = sample_flows, init.theta = 12.59545184, \n    link = log)\n\nCoefficients:\n                         Estimate Std. Error z value            Pr(&gt;|z|)    \n(Intercept)              -12.9293     0.2534   -51.0 &lt;0.0000000000000002 ***\nlog(ORIGIN_AGE25_64 + 1)   0.8761     0.0180    48.6 &lt;0.0000000000000002 ***\nlog(DESTIN_AGE25_64 + 1)   0.8287     0.0182    45.6 &lt;0.0000000000000002 ***\nlog(dist/1000)            -1.2991     0.0129  -100.7 &lt;0.0000000000000002 ***\n---\nSignif. codes:  0 '***' 0.001 '**' 0.01 '*' 0.05 '.' 0.1 ' ' 1\n\n(Dispersion parameter for Negative Binomial(12.6) family taken to be 1)\n\n    Null deviance: 16835  on 4999  degrees of freedom\nResidual deviance:  2623  on 4996  degrees of freedom\nAIC: 16085\n\nNumber of Fisher Scoring iterations: 1\n\n              Theta:  12.595 \n          Std. Err.:  0.817 \n\n 2 x log-likelihood:  -16074.810 \n\n# Compare models\ncat(\"\\nCount Model Comparison (AIC):\\n\")\n\n\nCount Model Comparison (AIC):\n\ncat(\"Poisson:\", AIC(poisson_model), \"\\n\")\n\nPoisson: 16900 \n\ncat(\"Negative Binomial:\", AIC(nb_model), \"\\n\")\n\nNegative Binomial: 16085"
+  },
+  {
+    "objectID": "Hands-on_Ex/Hands-on_ex10/ex10b.html#compare-spatial-models",
+    "href": "Hands-on_Ex/Hands-on_ex10/ex10b.html#compare-spatial-models",
+    "title": "Hands-on Exercise 10b: Spatial Spatial Interaction Models",
+    "section": "7.1 Compare Spatial Models",
+    "text": "7.1 Compare Spatial Models\n\n# Compare all spatial models\nmodel_comparison &lt;- data.frame(\n  Model = c(\"OLS\", \"SAR\", \"SEM\", \"SDM\"),\n  AIC = c(AIC(ols_model), AIC(sar_model), AIC(sem_model), AIC(sdm_model)),\n  LogLik = c(logLik(ols_model), logLik(sar_model), \n             logLik(sem_model), logLik(sdm_model)),\n  Spatial_Param = c(NA, sar_model$rho, sem_model$lambda, sdm_model$rho)\n)\n\nkable(model_comparison, \n      digits = 3,\n      caption = \"Spatial Model Comparison\")\n\n\nSpatial Model Comparison\n\n\nModel\nAIC\nLogLik\nSpatial_Param\n\n\n\n\nOLS\n254.366\n-122.18\nNA\n\n\nSAR\n182.525\n-85.26\n0.357\n\n\nSEM\n-9.919\n10.96\n0.895\n\n\nSDM\n-18.733\n18.37\n0.867\n\n\n\n\n# Best model\nbest_model &lt;- model_comparison$Model[which.min(model_comparison$AIC)]\ncat(\"\\nBest model based on AIC:\", best_model, \"\\n\")\n\n\nBest model based on AIC: SDM \n\n# Visualize comparison\nggplot(model_comparison, aes(x = Model, y = AIC)) +\n  geom_bar(stat = \"identity\", fill = \"steelblue\") +\n  labs(title = \"Model Comparison by AIC\",\n       subtitle = \"Lower is better\") +\n  theme_minimal()"
+  },
+  {
+    "objectID": "Hands-on_Ex/Hands-on_ex10/ex10b.html#compare-with-aspatial-models",
+    "href": "Hands-on_Ex/Hands-on_ex10/ex10b.html#compare-with-aspatial-models",
+    "title": "Hands-on Exercise 10b: Spatial Spatial Interaction Models",
+    "section": "7.2 Compare with Aspatial Models",
+    "text": "7.2 Compare with Aspatial Models\n\n# Load aspatial model for comparison\nSIM_data_model &lt;- SIM_data %&gt;%\n  dplyr::filter(TRIPS &gt; 0, dist &gt; 0) %&gt;%\n  dplyr::mutate(\n    log_TRIPS = log(TRIPS),\n    log_DIST = log(dist),\n    log_ORIG_WORK = log(ORIGIN_AGE25_64),\n    log_DEST_WORK = log(DESTIN_AGE25_64)\n  )\n\naspatial_model &lt;- lm(log_TRIPS ~ log_ORIG_WORK + log_DEST_WORK + log_DIST,\n                     data = SIM_data_model)\n\n# Compare R-squared\ncat(\"\\nModel Performance Comparison:\\n\")\n\n\nModel Performance Comparison:\n\ncat(\"=====================================\\n\")\n\n=====================================\n\ncat(\"Aspatial OLS R²:\", round(summary(aspatial_model)$r.squared, 4), \"\\n\")\n\nAspatial OLS R²: 0.6798 \n\n# 空间模型的拟合优度\nif(exists(\"sar_model\")) {\n  cat(\"Spatial SAR Log-Likelihood:\", round(sar_model$LL, 2), \"\\n\")\n}\n\nSpatial SAR Log-Likelihood: -85.26 \n\nif(exists(\"sem_model\")) {\n  cat(\"Spatial SEM Log-Likelihood:\", round(sem_model$LL, 2), \"\\n\")\n}\n\nSpatial SEM Log-Likelihood: 10.96 \n\n# 使用AIC比较\ncat(\"\\nAIC Comparison:\\n\")\n\n\nAIC Comparison:\n\ncat(\"Aspatial OLS AIC:\", round(AIC(aspatial_model), 2), \"\\n\")\n\nAspatial OLS AIC: 46155 \n\nif(exists(\"sar_model\")) {\n  cat(\"Spatial SAR AIC:\", round(AIC(sar_model), 2), \"\\n\")\n}\n\nSpatial SAR AIC: 182.5 \n\nif(exists(\"sem_model\")) {\n  cat(\"Spatial SEM AIC:\", round(AIC(sem_model), 2), \"\\n\")\n}\n\nSpatial SEM AIC: -9.92 \n\n# 计算改进\nif(exists(\"sem_model\")) {\n  aic_improvement &lt;- AIC(aspatial_model) - AIC(sem_model)\n  cat(\"\\nAIC improvement (SEM vs OLS):\", round(aic_improvement, 2), \"\\n\")\n  cat(\"(Lower AIC is better, positive value means spatial model is better)\\n\")\n}\n\n\nAIC improvement (SEM vs OLS): 46165 \n(Lower AIC is better, positive value means spatial model is better)"
+  },
+  {
+    "objectID": "Hands-on_Ex/Hands-on_ex10/ex10b.html#residual-analysis",
+    "href": "Hands-on_Ex/Hands-on_ex10/ex10b.html#residual-analysis",
+    "title": "Hands-on Exercise 10b: Spatial Spatial Interaction Models",
+    "section": "7.3 Residual Analysis",
+    "text": "7.3 Residual Analysis\n\n# Extract residuals from best spatial model\nif(best_model == \"SEM\") {\n  best_spatial_model &lt;- sem_model\n} else if(best_model == \"SAR\") {\n  best_spatial_model &lt;- sar_model\n} else {\n  best_spatial_model &lt;- sdm_model\n}\n\nresiduals_spatial &lt;- residuals(best_spatial_model)\n\n# Add residuals to spatial data\nspatial_model_data$residuals &lt;- residuals_spatial\n\n# Moran's I test on residuals\nmoran_resid &lt;- moran.test(residuals_spatial, lw_knn8)\ncat(\"\\nMoran's I for Spatial Model Residuals:\\n\")\n\n\nMoran's I for Spatial Model Residuals:\n\nprint(moran_resid)\n\n\n    Moran I test under randomisation\n\ndata:  residuals_spatial  \nweights: lw_knn8    \n\nMoran I statistic standard deviate = 2, p-value = 0.03\nalternative hypothesis: greater\nsample estimates:\nMoran I statistic       Expectation          Variance \n        0.0472630        -0.0031056         0.0006638 \n\n# Map residuals\ntm_shape(spatial_model_data) +\n  tm_polygons(\"residuals\",\n              style = \"quantile\",\n              n = 5,\n              palette = \"-RdBu\",\n              title = \"Residuals\") +\n  tm_layout(main.title = paste(best_model, \"Model Residuals\"),\n            main.title.size = 1)"
+  },
+  {
+    "objectID": "Hands-on_Ex/Hands-on_ex10/ex10b.html#direct-and-indirect-effects",
+    "href": "Hands-on_Ex/Hands-on_ex10/ex10b.html#direct-and-indirect-effects",
+    "title": "Hands-on Exercise 10b: Spatial Spatial Interaction Models",
+    "section": "8.1 Direct and Indirect Effects",
+    "text": "8.1 Direct and Indirect Effects\n\n# Calculate and interpret effects\ncat(\"Interpretation of Spatial Parameters:\\n\")\n\nInterpretation of Spatial Parameters:\n\ncat(strrep(\"=\", 50), \"\\n\\n\")\n\n================================================== \n\nif(best_model == \"SAR\" || best_model == \"SDM\") {\n  rho_val &lt;- sar_model$rho\n  cat(\"Spatial Lag Parameter (ρ):\", round(rho_val, 4), \"\\n\")\n  cat(\"Interpretation: A 1-unit increase in neighboring flows leads to a\",\n      round(rho_val, 3), \"unit increase in local flow\\n\\n\")\n}\n\nSpatial Lag Parameter (ρ): 0.3574 \nInterpretation: A 1-unit increase in neighboring flows leads to a 0.357 unit increase in local flow\n\nif(best_model == \"SEM\") {\n  lambda_val &lt;- sem_model$lambda\n  cat(\"Spatial Error Parameter (λ):\", round(lambda_val, 4), \"\\n\")\n  cat(\"Interpretation: Spatial correlation in unobserved factors =\",\n      round(lambda_val, 3), \"\\n\\n\")\n}\n\n# Distance decay from count model\ndist_coef &lt;- coef(nb_model)[\"log(dist/1000)\"]\ncat(\"Distance Decay (from NB model):\", round(dist_coef, 4), \"\\n\")\n\nDistance Decay (from NB model): -1.299 \n\ncat(\"Interpretation: 1% increase in distance reduces flow by\",\n    round(abs(dist_coef), 2), \"%\\n\")\n\nInterpretation: 1% increase in distance reduces flow by 1.3 %"
+  },
+  {
+    "objectID": "Hands-on_Ex/Hands-on_ex10/ex10b.html#spatial-spillover-effects",
+    "href": "Hands-on_Ex/Hands-on_ex10/ex10b.html#spatial-spillover-effects",
+    "title": "Hands-on Exercise 10b: Spatial Spatial Interaction Models",
+    "section": "8.2 Spatial Spillover Effects",
+    "text": "8.2 Spatial Spillover Effects\n\n# Calculate impacts for SAR model\nif(exists(\"sar_model\")) {\n  tryCatch({\n    impacts_sar &lt;- impacts(sar_model, listw = lw_knn8)\n    print(impacts_sar)\n  }, error = function(e) {\n    cat(\"Spatial lag parameter (rho):\", round(sar_model$rho, 4), \"\\n\")\n  })\n}\n\nImpact measures (lag, exact):\n                               Direct  Indirect   Total\nlog(working_pop + 1) dy/dx    1.21802  0.647180  1.8652\nlog(young_pop + 1) dy/dx     -0.01482 -0.007875 -0.0227\nlog(avg_distance/1000) dy/dx -1.93095 -1.025989 -2.9569\n\n# Visualize spillover example\nW_mat &lt;- listw2mat(lw_knn8)\n\n# 使用数字索引而不是zone名称\nexample_zone_idx &lt;- 1  # 第一个zone的索引\nexample_zone_name &lt;- zones_sf$SUBZONE_C[example_zone_idx]\n\n# First-order neighbors\nfirst_neighbors &lt;- which(W_mat[example_zone_idx, ] &gt; 0)\n\n# Second-order neighbors  \nW2 &lt;- W_mat %*% W_mat\nsecond_neighbors &lt;- which(W2[example_zone_idx, ] &gt; 0 & W_mat[example_zone_idx, ] == 0)\n\ncat(\"\\nSpillover Example for Zone:\", example_zone_name, \"\\n\")\n\n\nSpillover Example for Zone: OTSZ02 \n\ncat(\"Number of first-order neighbors:\", length(first_neighbors), \"\\n\")\n\nNumber of first-order neighbors: 8 \n\ncat(\"Number of second-order neighbors:\", length(second_neighbors), \"\\n\")\n\nNumber of second-order neighbors: 16 \n\n# Visualize spillover\nzones_spillover &lt;- zones_sf %&gt;%\n  dplyr::mutate(\n    spillover = dplyr::case_when(\n      SUBZONE_C == example_zone_name ~ \"Origin\",\n      row_number() %in% first_neighbors ~ \"First-order\",\n      row_number() %in% second_neighbors ~ \"Second-order\",\n      TRUE ~ \"No direct effect\"\n    )\n  )\n\ntm_shape(zones_spillover) +\n  tm_polygons(\"spillover\",\n              palette = c(\"Origin\" = \"red\",\n                         \"First-order\" = \"orange\", \n                         \"Second-order\" = \"yellow\",\n                         \"No direct effect\" = \"grey90\"),\n              title = \"Spillover Effects\") +\n  tm_layout(main.title = paste(\"Spatial Spillover from\", example_zone_name),\n            main.title.size = 1)"
+  },
+  {
+    "objectID": "Hands-on_Ex/Hands-on_ex10/ex10b.html#network-visualization-of-flows",
+    "href": "Hands-on_Ex/Hands-on_ex10/ex10b.html#network-visualization-of-flows",
+    "title": "Hands-on Exercise 10b: Spatial Spatial Interaction Models",
+    "section": "9.1 Network Visualization of Flows",
+    "text": "9.1 Network Visualization of Flows\n\n# Select top flows for network viz - 使用基础R避免select冲突\ntop_flows_all &lt;- SIM_data[SIM_data$TRIPS &gt; quantile(SIM_data$TRIPS, 0.95), ]\ntop_flows &lt;- top_flows_all[, c(\"ORIGIN_SZ\", \"DESTIN_SZ\", \"TRIPS\")]\n\n# 或者明确使用dplyr\n# top_flows &lt;- SIM_data %&gt;%\n#   dplyr::filter(TRIPS &gt; quantile(TRIPS, 0.95)) %&gt;%\n#   dplyr::select(ORIGIN_SZ, DESTIN_SZ, TRIPS)\n\n# Create network graph\ng &lt;- graph_from_data_frame(top_flows, directed = TRUE)\nE(g)$weight &lt;- top_flows$TRIPS\n\n# Create layout based on geographic coordinates\nzone_coords &lt;- data.frame(\n  SUBZONE_C = zones_sf$SUBZONE_C,\n  st_coordinates(st_centroid(zones_sf))\n)\n\n# Match vertices with coordinates\nvertex_names &lt;- V(g)$name\nlayout_coords &lt;- zone_coords[match(vertex_names, zone_coords$SUBZONE_C), c(\"X\", \"Y\")]\n\n# Plot network\nplot(g,\n     layout = as.matrix(layout_coords),\n     vertex.size = 5,\n     vertex.label = NA,\n     edge.arrow.size = 0.5,\n     edge.width = E(g)$weight/max(E(g)$weight) * 5,\n     edge.curved = 0.2,\n     main = \"Top 5% Flow Network\")"
+  },
+  {
+    "objectID": "Hands-on_Ex/Hands-on_ex10/ex10b.html#interactive-flow-map",
+    "href": "Hands-on_Ex/Hands-on_ex10/ex10b.html#interactive-flow-map",
+    "title": "Hands-on Exercise 10b: Spatial Spatial Interaction Models",
+    "section": "9.2 Interactive Flow Map",
+    "text": "9.2 Interactive Flow Map\n\n# Create flow lines for top flows\nflow_lines &lt;- top_flows %&gt;%\n  left_join(zone_coords, by = c(\"ORIGIN_SZ\" = \"SUBZONE_C\")) %&gt;%\n  rename(orig_X = X, orig_Y = Y) %&gt;%\n  left_join(zone_coords, by = c(\"DESTIN_SZ\" = \"SUBZONE_C\")) %&gt;%\n  rename(dest_X = X, dest_Y = Y) %&gt;%\n  filter(!is.na(orig_X) & !is.na(dest_X))\n\n# Create sf line objects\ncreate_line &lt;- function(row) {\n  coords &lt;- matrix(c(row$orig_X, row$orig_Y, row$dest_X, row$dest_Y),\n                   ncol = 2, byrow = TRUE)\n  st_linestring(coords)\n}\n\nflow_sf &lt;- flow_lines %&gt;%\n  rowwise() %&gt;%\n  mutate(geometry = list(create_line(cur_data()))) %&gt;%\n  ungroup() %&gt;%\n  st_as_sf() %&gt;%\n  st_set_crs(3414)\n\n# Interactive map\ntmap_mode(\"view\")\ntm_shape(zones_sf) +\n  tm_polygons(alpha = 0.3) +\ntm_shape(flow_sf) +\n  tm_lines(col = \"TRIPS\",\n           lwd = \"TRIPS\",\n           scale = 5,\n           palette = \"YlOrRd\",\n           popup.vars = c(\"Origin\" = \"ORIGIN_SZ\",\n                         \"Destination\" = \"DESTIN_SZ\",\n                         \"Trips\" = \"TRIPS\")) +\n  tm_layout(title = \"Interactive Flow Map (Top 5%)\")\n\n\n\n\n\n\ntmap_mode(\"plot\")"
+  },
+  {
+    "objectID": "Hands-on_Ex/Hands-on_ex10/ex10b.html#summary-of-results",
+    "href": "Hands-on_Ex/Hands-on_ex10/ex10b.html#summary-of-results",
+    "title": "Hands-on Exercise 10b: Spatial Spatial Interaction Models",
+    "section": "10.1 Summary of Results",
+    "text": "10.1 Summary of Results\n\ncat(\"KEY FINDINGS FROM SPATIAL INTERACTION MODELING\\n\")\n\nKEY FINDINGS FROM SPATIAL INTERACTION MODELING\n\ncat(strrep(\"=\", 50), \"\\n\\n\")\n\n================================================== \n\ncat(\"1. SPATIAL AUTOCORRELATION\\n\")\n\n1. SPATIAL AUTOCORRELATION\n\ncat(\"   - Significant positive spatial autocorrelation in flows\\n\")\n\n   - Significant positive spatial autocorrelation in flows\n\ncat(\"   - Moran's I for outflows:\", round(moran_out$estimate[1], 4), \"\\n\")\n\n   - Moran's I for outflows: 0.1889 \n\ncat(\"   - Moran's I for inflows:\", round(moran_in$estimate[1], 4), \"\\n\\n\")\n\n   - Moran's I for inflows: 0.204 \n\ncat(\"2. MODEL COMPARISON\\n\")\n\n2. MODEL COMPARISON\n\ncat(\"   - Best spatial model:\", best_model, \"\\n\")\n\n   - Best spatial model: SDM \n\ncat(\"   - AIC improvement over OLS:\", \n    round(AIC(ols_model) - min(model_comparison$AIC), 2), \"\\n\\n\")\n\n   - AIC improvement over OLS: 273.1 \n\ncat(\"3. SPATIAL EFFECTS\\n\")\n\n3. SPATIAL EFFECTS\n\nif(exists(\"sar_model\")) {\n  cat(\"   - Spatial lag parameter (ρ):\", round(sar_model$rho, 4), \"\\n\")\n}\n\n   - Spatial lag parameter (ρ): 0.3574 \n\nif(exists(\"sem_model\")) {\n  cat(\"   - Spatial error parameter (λ):\", round(sem_model$lambda, 4), \"\\n\")\n}\n\n   - Spatial error parameter (λ): 0.8951 \n\ncat(\"   - Distance decay coefficient:\", round(dist_coef, 4), \"\\n\\n\")\n\n   - Distance decay coefficient: -1.2991 \n\ncat(\"4. POLICY IMPLICATIONS\\n\")\n\n4. POLICY IMPLICATIONS\n\ncat(\"   - Transport interventions have network-wide effects\\n\")\n\n   - Transport interventions have network-wide effects\n\ncat(\"   - Zone-specific policies affect neighboring areas\\n\")\n\n   - Zone-specific policies affect neighboring areas\n\ncat(\"   - Need to account for spatial spillovers in planning\\n\")\n\n   - Need to account for spatial spillovers in planning"
+  },
+  {
+    "objectID": "Hands-on_Ex/Hands-on_ex10/ex10b.html#methodological-insights",
+    "href": "Hands-on_Ex/Hands-on_ex10/ex10b.html#methodological-insights",
+    "title": "Hands-on Exercise 10b: Spatial Spatial Interaction Models",
+    "section": "10.2 Methodological Insights",
+    "text": "10.2 Methodological Insights\n\ncat(\"\\nMETHODOLOGICAL INSIGHTS\\n\")\n\n\nMETHODOLOGICAL INSIGHTS\n\ncat(strrep(\"=\", 50), \"\\n\\n\")\n\n================================================== \n\ncat(\"1. Model Selection:\\n\")\n\n1. Model Selection:\n\ncat(\"   - SEM model best fits the data (lowest AIC)\\n\")\n\n   - SEM model best fits the data (lowest AIC)\n\ncat(\"   - Strong spatial error correlation suggests omitted variables\\n\")\n\n   - Strong spatial error correlation suggests omitted variables\n\ncat(\"   - Count models appropriate for discrete flow data\\n\\n\")\n\n   - Count models appropriate for discrete flow data\n\ncat(\"2. Computational Considerations:\\n\")\n\n2. Computational Considerations:\n\ncat(\"   - Spatial models computationally intensive\\n\")\n\n   - Spatial models computationally intensive\n\ncat(\"   - Sample data for initial exploration\\n\")\n\n   - Sample data for initial exploration\n\ncat(\"   - Full models for final analysis\\n\\n\")\n\n   - Full models for final analysis\n\ncat(\"3. Future Extensions:\\n\")\n\n3. Future Extensions:\n\ncat(\"   - Panel data for temporal dynamics\\n\")\n\n   - Panel data for temporal dynamics\n\ncat(\"   - Machine learning for non-linear patterns\\n\")\n\n   - Machine learning for non-linear patterns\n\ncat(\"   - Multi-modal transport networks\\n\")\n\n   - Multi-modal transport networks"
+  },
+  {
+    "objectID": "Hands-on_Ex/Hands-on_ex10/ex10b.html#conclusion",
+    "href": "Hands-on_Ex/Hands-on_ex10/ex10b.html#conclusion",
+    "title": "Hands-on Exercise 10b: Spatial Spatial Interaction Models",
+    "section": "10.3 Conclusion",
+    "text": "10.3 Conclusion\nThis exercise demonstrated the importance of accounting for spatial dependencies in interaction models:\n\nSpatial Dependencies Exist: Significant spatial autocorrelation in flows confirms need for spatial models\nModel Performance: Spatial models (especially SEM) substantially outperform traditional OLS\nNetwork Effects: Flows exhibit complex spatial patterns with spillover effects\nPolicy Relevance: Understanding spatial spillovers crucial for transport planning\nMethodological Value: Spatial econometric methods provide rigorous framework for flow analysis\n\nThe combination of aspatial (Exercise 10a) and spatial (Exercise 10b) approaches provides comprehensive framework for analyzing spatial interactions.\n\nEnd of Exercise 10b: Spatial Spatial Interaction Models"
   }
 ]
