@@ -38,14 +38,16 @@ website:
             href: Hands-on_Ex/Hands-on_ex10/ex10a.qmd
           - text: Ex10b · SIM Calibration (spflow)
             href: Hands-on_Ex/Hands-on_ex10/ex10b.qmd
+
       - text: In-class
         href: In-class_Ex/index.qmd
+
       - text: Take-home
         menu:
           - text: TH01 · Spatio-temporal Business Registrations
             href: Take-home_Ex/take-home_ex01/the01.qmd
-          - text: Index
-            href: Take-home_Ex/index.qmd
+          - text: TH02 · Spatio-temporal Bus Passenger Flows
+            href: Take-home_Ex/take-home_ex02/the02.qmd
 
 format:
   html:
@@ -55,7 +57,7 @@ format:
     self-contained: false   
 
 execute:
-  freeze: auto              
-  cache: true               
+  freeze: auto
+  cache: true
 
 editor: visual

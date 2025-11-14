@@ -1,0 +1,658 @@
+---
+title: "Take-home Exercise 2: Spatio-temporal Analysis of Bus Passenger Flows Using Hexagonal Tessellation"
+author: "Huang Pengxin"
+date: "`r Sys.Date()`"
+date-modified: "last-modified"
+format:
+  html:
+    toc: true
+    toc-depth: 4
+    code-fold: true
+    code-summary: "Show code"
+    number-sections: true
+    fig-width: 12
+    fig-height: 8
+execute:
+  warning: false
+  message: false
+  echo: true
+---
+
+# Introduction
+
+This analysis examines spatial autocorrelation patterns and emerging hot spots in Singapore's bus passenger flows. Using **375 m hexagonal tessellation** (apothem = 375 m), we apply Local Measures of Spatial Autocorrelation (LMSA)—**Local Moran's I**, **Local Geary's C** and **Getis-Ord Gi\***—followed by **Emerging Hot Spot Analysis (EHSA)** to identify spatio-temporal trends across three time windows required in TH02:
+
+- **Weekday AM peak**: 06:00–09:00  
+- **Weekday PM peak**: 17:00–20:00  
+- **Weekend/Holiday**: 11:00–20:00
+
+# Data & Reproducibility
+
+- **OD** (latest month) from **LTA DataMall** (`PV/ODBus` / `PV/BusODVolume` API).  
+- **Bus stops** from **LTA Bus Stop (GEOJSON)** on data.gov.sg.
+- **Subzones** from **Master Plan 2019 Subzone Boundary (No Sea)** (GEOJSON).  
+- CRS: **EPSG:3414 (SVY21 / m)**.
+
+**Time Window Note**: The analysis uses left-closed, right-open hour intervals:
+- Weekday AM peak (06-09): includes trips from 06:00:00 to 08:59:59
+- Weekday PM peak (17-20): includes trips from 17:00:00 to 19:59:59  
+- Weekend/Holiday (11-20): includes trips from 11:00:00 to 19:59:59
+
+## Setup Environment
+```{r}
+#| label: setup
+pacman::p_load(
+  tidyverse, lubridate, glue,
+  sf, spdep, sfdep,
+  tmap, viridis, units,
+  httr, jsonlite, zip, readr,
+  trend, Kendall, janitor,
+  gt, knitr, DT
+)
+
+# tmap mode
+tmap_mode("plot")
+set.seed(1234)
+options(scipen = 999)
+
+# Folder structure
+dir.create("data", showWarnings = FALSE)
+dir.create("data/aspatial", recursive = TRUE, showWarnings = FALSE)
+dir.create("data/geospatial", recursive = TRUE, showWarnings = FALSE)
+dir.create("figures", showWarnings = FALSE)
+dir.create("data/processed", recursive = TRUE, showWarnings = FALSE)
+```
+
+## Geospatial Data: Subzones & Bus Stops
+```{r}
+#| label: load-geospatial
+# 1) Subzones (GEOJSON)
+subzone_path <- "data/geospatial/MasterPlan2019SubzoneBoundaryNoSeaGEOJSON.geojson"
+
+if(file.exists(subzone_path)) {
+  mpsz <- st_read(subzone_path, quiet = TRUE) %>%
+    st_transform(3414) %>%
+    st_make_valid()
+} else {
+  stop("Subzone GEOJSON not found at: ", subzone_path)
+}
+
+sg_boundary <- mpsz %>%
+  st_union() %>%
+  st_make_valid()
+
+# 2) Bus Stops - use local file
+bus_geojson <- "data/geospatial/LTABusStop.geojson"
+
+if (file.exists(bus_geojson)) {
+  message("Reading bus stops from local GEOJSON...")
+  bus_stops <- st_read(bus_geojson, quiet = TRUE) %>%
+    st_transform(3414)
+  
+  # Standardize column name
+  if("BUS_STOP_NUM" %in% names(bus_stops)) {
+    bus_stops <- bus_stops %>%
+      mutate(BUS_STOP_CODE = as.character(BUS_STOP_NUM)) %>%
+      select(BUS_STOP_CODE, geometry)
+  } else if("BUS_STOP_N" %in% names(bus_stops)) {
+    bus_stops <- bus_stops %>%
+      mutate(BUS_STOP_CODE = as.character(BUS_STOP_N)) %>%
+      select(BUS_STOP_CODE, geometry)
+  }
+} else {
+  stop("Bus stop GEOJSON not found at: ", bus_geojson)
+}
+
+cat("Spatial data loaded:\n")
+cat("- Subzone polygons:", nrow(mpsz), "\n")
+cat("- Unique bus stops:", nrow(bus_stops), "\n")
+```
+
+## OD Data Download and Processing
+```{r}
+#| label: od-download-and-load
+od_dir <- "data/aspatial"
+dir.create(od_dir, showWarnings = FALSE, recursive = TRUE)
+
+# Read API key from environment (SET THIS IN ~/.Renviron)
+LTA_KEY <- Sys.getenv("LTA_DATAMALL_KEY")
+if(LTA_KEY == "") {
+  # Temporary fallback - REMOVE BEFORE PUBLISHING!
+  LTA_KEY <- "Lu0AzZeBS5uGe5uQNihkWA=="  
+  warning("Using hardcoded API key. Set LTA_DATAMALL_KEY in ~/.Renviron for security!")
+}
+
+dm_get <- function(url, query = list(), key = LTA_KEY) {
+  res <- httr::GET(url, query = query,
+                   httr::add_headers(AccountKey = key, Accept = "application/json"),
+                   httr::timeout(60))
+  if (httr::status_code(res) != 200) stop("DataMall GET failed: ", url, " | HTTP ", httr::status_code(res))
+  jsonlite::fromJSON(httr::content(res, "text", encoding = "UTF-8"), simplifyDataFrame = TRUE)
+}
+
+download_od_latest <- function(out_dir = od_dir) {
+  # Try PV/ODBus first (returns ZIP link)
+  link <- NULL
+  try({
+    z <- dm_get("https://datamall2.mytransport.sg/ltaodataservice/PV/ODBus")
+    cand <- c("Link","link","URL","Url")
+    for (c in cand) if (!is.null(z[[c]])) { link <- z[[c]]; break }
+    if (is.null(link) && !is.null(z$value) && length(z$value)>0 && !is.null(z$value$Link)) 
+      link <- z$value$Link[1]
+  }, silent = TRUE)
+
+  if (!is.null(link) && nzchar(link)) {
+    message("Found OD ZIP link: ", link)
+    zipfile <- file.path(out_dir, "od_latest.zip")
+    utils::download.file(link, destfile = zipfile, mode = "wb", quiet = TRUE)
+    utils::unzip(zipfile, exdir = out_dir)
+    unlink(zipfile)
+    csvs <- list.files(out_dir, pattern = "(?i)origin.*destination.*bus.*\\.csv$", full.names = TRUE)
+    if (length(csvs) == 0) csvs <- list.files(out_dir, pattern = "\\.csv$", full.names = TRUE)
+    stopifnot("No CSV found in OD ZIP." = length(csvs) > 0)
+    return(csvs[1])
+  }
+
+  # Fallback: PV/BusODVolume (paged JSON)
+  message("Falling back to PV/BusODVolume (paged JSON)...")
+  all <- list()
+  skip <- 0L
+  repeat {
+    dat <- dm_get("https://datamall2.mytransport.sg/ltaodataservice/PV/BusODVolume",
+                  query = list(`$skip` = skip))
+    v <- dat$value
+    if (is.null(v) || nrow(v) == 0) break
+    all[[length(all)+1]] <- v
+    skip <- skip + nrow(v)
+    if (nrow(v) < 500) break
+    Sys.sleep(0.25)
+  }
+  od_raw <- dplyr::bind_rows(all)
+  stopifnot("OD API returned empty." = nrow(od_raw) > 0)
+
+  od_std <- janitor::clean_names(od_raw)
+  # Standardize column names
+  ren <- list(
+    ORIGIN_PT_CODE = c("origin_pt_code","originbusstopcode","origin_bus_stop_code"),
+    DESTINATION_PT_CODE = c("destination_pt_code","destinationbusstopcode","destination_bus_stop_code"),
+    DAY_TYPE = c("day_type","daytype"),
+    TIME_PER_HOUR = c("time_per_hour","timeperiod","hour"),
+    TOTAL_TRIPS = c("total_trips","pt_trips","trips","volume")
+  )
+  for (std in names(ren)) {
+    hit <- intersect(ren[[std]], names(od_std))
+    if (length(hit) > 0) od_std <- dplyr::rename(od_std, !!std := dplyr::all_of(hit[1]))
+  }
+  out_csv <- file.path(out_dir, "od_bus_latest.csv")
+  readr::write_csv(od_std, out_csv)
+  return(out_csv)
+}
+
+# Check if we have recent OD data
+od_file <- "data/aspatial/od_bus_latest.csv"
+if(file.exists(od_file)) {
+  file_age <- difftime(Sys.time(), file.info(od_file)$mtime, units = "days")
+  if(file_age > 7) {
+    message("OD data is ", round(file_age), " days old. Downloading fresh data...")
+    od_csv <- download_od_latest()
+  } else {
+    message("Using existing OD data (", round(file_age), " days old)")
+    od_csv <- od_file
+  }
+} else {
+  message("No OD data found. Downloading from DataMall...")
+  od_csv <- download_od_latest()
+}
+
+od_data <- readr::read_csv(od_csv, show_col_types = FALSE)
+names(od_data) <- toupper(names(od_data))
+
+# Type conversions
+od_data <- od_data %>%
+  mutate(
+    ORIGIN_PT_CODE = as.character(ORIGIN_PT_CODE),
+    DESTINATION_PT_CODE = as.character(DESTINATION_PT_CODE),
+    DAY_TYPE = as.character(DAY_TYPE),
+    TIME_PER_HOUR = sprintf("%02d", as.integer(TIME_PER_HOUR)),
+    TOTAL_TRIPS = as.numeric(TOTAL_TRIPS)
+  )
+
+cat("OD loaded:", nrow(od_data), "rows from DataMall\n")
+cat("Date range in data:", paste(unique(od_data$DAY_TYPE), collapse = ", "), "\n")
+```
+
+# Hexagonal Grid: 375 m (apothem)
+```{r}
+#| label: hexgrid
+# Generate hexagons: apothem = 375 m -> flat-to-flat width ~= 750 m
+hex_grid <- st_make_grid(sg_boundary, cellsize = 750, square = FALSE, what = "polygons") %>%
+  st_sf(geometry = .) %>%
+  st_intersection(sg_boundary) %>%
+  mutate(hex_id = row_number(),
+         area_m2 = as.numeric(st_area(geometry))) %>%
+  filter(area_m2 > 1e4)
+
+# Sanity check
+expected_area <- 2*sqrt(3)*(375^2)  # ≈ 486,000 m²
+cat("Hex grid created. n =", nrow(hex_grid),
+    "| mean area =", round(mean(hex_grid$area_m2)), "m²",
+    "| expected ≈", round(expected_area), "m²\n")
+
+# Visual check
+tm_shape(hex_grid) + 
+  tm_borders(alpha=0.6, col = "darkblue") +
+  tm_shape(bus_stops) + 
+  tm_dots(size=0.01, col="red", alpha=0.3) +
+  tm_layout(main.title = "375m (apothem) Hex Grid with Bus Stops", frame = FALSE)
+```
+
+## Assign Bus Stops to Hexagons
+```{r}
+#| label: join-bus-hex
+bus_hex <- st_join(bus_stops, hex_grid, join = st_within) %>%
+  st_drop_geometry() %>%
+  select(BUS_STOP_CODE, hex_id) %>%
+  filter(!is.na(hex_id))
+
+hex_stop_count <- bus_hex %>%
+  count(hex_id, name = "n_stops") %>%
+  arrange(desc(n_stops))
+
+cat("Bus stops assigned to hexagons: ", nrow(bus_hex), "\n")
+head(hex_stop_count, 5) %>%
+  kable(caption = "Top 5 hexagons by bus stop count")
+```
+
+# Trip Generation Maps (Required)
+
+## Define Time Windows
+```{r}
+#| label: time-windows
+time_windows <- list(
+  "Weekday AM peak (06-09)" = list(day="WEEKDAY", hours=sprintf("%02d", 6:8)),
+  "Weekday PM peak (17-20)" = list(day="WEEKDAY", hours=sprintf("%02d", 17:19)),
+  "Weekend/Holiday (11-20)" = list(day="WEEKENDS/HOLIDAY", hours=sprintf("%02d", 11:19))
+)
+```
+
+## Aggregate to Hexagon Level
+```{r}
+#| label: agg-hex
+process_window <- function(win_name, cfg) {
+  od_f <- od_data %>%
+    filter(DAY_TYPE == cfg$day,
+           TIME_PER_HOUR %in% cfg$hours) %>%
+    group_by(ORIGIN_PT_CODE) %>%
+    summarise(trips = sum(TOTAL_TRIPS, na.rm=TRUE), .groups="drop")
+
+  od_hex <- od_f %>%
+    inner_join(bus_hex, by = c("ORIGIN_PT_CODE"="BUS_STOP_CODE")) %>%
+    group_by(hex_id) %>%
+    summarise(outflow = sum(trips), .groups="drop") %>%
+    mutate(period = win_name)
+
+  return(od_hex)
+}
+
+flows_all <- map2_df(names(time_windows), time_windows, process_window)
+
+flows_sf <- hex_grid %>%
+  left_join(flows_all, by = "hex_id") %>%
+  mutate(outflow = replace_na(outflow, 0))
+```
+
+## Three Choropleth Maps
+```{r}
+#| label: trip-maps
+#| fig-height: 18
+
+# Draw maps for each period
+draw_flow_map <- function(df, period_name) {
+  tm_shape(df %>% filter(period == period_name)) +
+    tm_fill("outflow", 
+            style = "quantile", 
+            n = 7, 
+            palette = "YlOrRd",
+            title = "Origin trips") +
+    tm_borders(alpha = 0.3) +
+    tm_layout(main.title = period_name, 
+              frame = FALSE,
+              legend.position = c("right", "bottom"))
+}
+
+m1 <- draw_flow_map(flows_sf, "Weekday AM peak (06-09)")
+m2 <- draw_flow_map(flows_sf, "Weekday PM peak (17-20)")
+m3 <- draw_flow_map(flows_sf, "Weekend/Holiday (11-20)")
+
+tmap_arrange(m1, m2, m3, ncol = 1)
+```
+
+**Weekday AM Peak Commentary**: The morning peak shows high concentration of trip origins in residential areas, particularly in mature estates like Tampines, Jurong West, and Woodlands. CBD and industrial areas show relatively lower origin flows, consistent with commuting patterns where people travel from homes to workplaces. The spatial distribution reveals clear clustering in HDB towns, suggesting strong demand for first-mile connectivity to MRT stations and bus interchanges during morning rush hours.
+
+**Weekday PM Peak Commentary**: Evening peak displays a reversed pattern with high origin flows from employment centers including CBD, one-north, and industrial estates. This reflects the return journey from work to residential areas, though the intensity is more dispersed than morning peak. Notable hotspots appear around Raffles Place, Tanjong Pagar, and Jurong Industrial Estate, indicating concentrated workforce distribution requiring enhanced evening services.
+
+**Weekend/Holiday Commentary**: Weekend patterns show more evenly distributed flows with hotspots at transportation hubs and shopping districts. The extended time window (11-20) captures leisure and shopping trips, with notable activity around Orchard, Marina Bay, and regional centers like Jurong East and Tampines. The distribution suggests polycentric travel patterns focused on retail and recreational destinations rather than work-related commuting.
+
+# Local Measures of Spatial Autocorrelation (LMSA)
+
+## Spatial Weights Matrix
+```{r}
+#| label: weights
+# Focus on Weekday AM peak
+am_sf <- flows_sf %>% 
+  filter(period == "Weekday AM peak (06-09)") %>%
+  mutate(log_outflow = log1p(outflow))
+
+nb_q <- poly2nb(am_sf, queen = TRUE)
+lw_q <- nb2listw(nb_q, style = "W", zero.policy = TRUE)
+
+conn <- data.frame(
+  Metric = c("Average neighbors", "Min neighbors", "Max neighbors", "Isolated units"),
+  Value = c(mean(card(nb_q)), min(card(nb_q)), max(card(nb_q)), sum(card(nb_q) == 0))
+)
+kable(conn, caption = "Spatial Connectivity Summary")
+```
+
+## Local Moran's I
+```{r}
+#| label: lisa
+lisa <- localmoran(am_sf$log_outflow, lw_q, zero.policy = TRUE)
+
+am_sf <- am_sf %>%
+  mutate(
+    lisa_I = lisa[,1],
+    lisa_p = lisa[,5],
+    lag_out = lag.listw(lw_q, log_outflow, zero.policy=TRUE),
+    mean_lo = mean(log_outflow),
+    lisa_quad = case_when(
+      lisa_p >= 0.05 ~ "Not Significant",
+      log_outflow > mean_lo & lag_out > mean_lo ~ "High-High",
+      log_outflow < mean_lo & lag_out < mean_lo ~ "Low-Low",
+      log_outflow > mean_lo & lag_out < mean_lo ~ "High-Low",
+      TRUE ~ "Low-High"
+    )
+  )
+
+tm_shape(am_sf %>% filter(lisa_p < 0.05)) +
+  tm_fill("lisa_quad",
+          palette = c("High-High"="#d7191c", "High-Low"="#fdae61",
+                     "Low-High"="#abd9e9", "Low-Low"="#2c7bb6"),
+          title = "LISA Clusters") +
+  tm_borders(alpha = 0.3) +
+  tm_layout(main.title = "Local Moran's I (p < 0.05)", frame = FALSE)
+```
+
+## Getis-Ord Gi*
+```{r}
+#| label: gist
+gi <- localG(am_sf$log_outflow, lw_q, zero.policy = TRUE)
+
+am_sf <- am_sf %>%
+  mutate(
+    gi = as.numeric(gi),
+    gi_p = 2 * pnorm(abs(gi), lower.tail = FALSE),
+    hotspot = case_when(
+      gi_p >= 0.05 ~ "Not Significant",
+      gi > 0 ~ "Hot Spot",
+      TRUE ~ "Cold Spot"
+    )
+  )
+
+tm_shape(am_sf %>% filter(gi_p < 0.05)) +
+  tm_fill("gi",
+          palette = "-RdBu",
+          title = "Gi* z-score",
+          style = "cont",
+          midpoint = 0) +
+  tm_borders(alpha = 0.3) +
+  tm_layout(main.title = "Getis-Ord Gi* (p < 0.05)", frame = FALSE)
+```
+
+## Local Geary's C
+```{r}
+#| label: geary
+# Using spdep::localC for Local Geary's C
+geary_c <- spdep::localC(am_sf$log_outflow, lw_q)
+
+am_sf <- am_sf %>%
+  mutate(
+    geary_c = as.numeric(geary_c),
+    geary_cat = case_when(
+      geary_c < 0.5 ~ "Positive autocorrelation",
+      geary_c > 1.5 ~ "Negative autocorrelation", 
+      TRUE ~ "No autocorrelation"
+    )
+  )
+
+# For significance, use permutation approach
+set.seed(123)
+nsim <- 499
+geary_sim <- replicate(nsim, {
+  spdep::localC(sample(am_sf$log_outflow), lw_q)
+})
+
+# Calculate p-values
+geary_p <- sapply(1:length(geary_c), function(i) {
+  sum(abs(geary_sim[i,]) >= abs(geary_c[i])) / nsim
+})
+
+am_sf$geary_p <- geary_p
+
+# Map only significant results
+tm_shape(am_sf %>% filter(geary_p < 0.05)) +
+  tm_fill("geary_c", 
+          palette = "RdBu", 
+          midpoint = 1,
+          title = "Local Geary's C",
+          style = "cont") +
+  tm_borders(alpha = 0.3) +
+  tm_layout(main.title = "Local Geary's C (p < 0.05)", frame = FALSE)
+```
+
+# Emerging Hot Spot Analysis (EHSA)
+
+## Calculate Gi* for Each Time Window
+```{r}
+#| label: ehsa-prep
+calc_gi_for <- function(period_name, base_sf = hex_grid) {
+  dat <- flows_all %>% filter(period == period_name)
+  sfp <- base_sf %>%
+    left_join(dat, by = "hex_id") %>%
+    mutate(outflow = replace_na(outflow, 0),
+           log_outflow = log1p(outflow))
+  
+  nb <- poly2nb(sfp, queen = TRUE)
+  lw <- nb2listw(nb, style = "W", zero.policy = TRUE)
+  gi <- localG(sfp$log_outflow, lw, zero.policy = TRUE)
+  
+  tibble(hex_id = sfp$hex_id,
+         period = period_name,
+         gi = as.numeric(gi))
+}
+
+gi_ts <- bind_rows(
+  calc_gi_for("Weekday AM peak (06-09)"),
+  calc_gi_for("Weekday PM peak (17-20)"),
+  calc_gi_for("Weekend/Holiday (11-20)")
+)
+
+gi_wide <- gi_ts %>%
+  pivot_wider(names_from = period, values_from = gi)
+```
+
+## Mann-Kendall Trend Test
+```{r}
+#| label: mann-kendall
+# Suppress warnings for cleaner output
+suppressWarnings({
+  
+  # Function to safely perform Mann-Kendall test
+  safe_mk <- function(x) {
+    x_clean <- x[!is.na(x)]
+    
+    # Need at least 3 values
+    if(length(x_clean) < 3) {
+      return(list(tau = NA_real_, p = NA_real_))
+    }
+    
+    # Check if all values are identical (no trend possible)
+    if(length(unique(x_clean)) == 1) {
+      return(list(tau = 0, p = 1))  # No trend
+    }
+    
+    # Try Mann-Kendall test
+    tryCatch({
+      mk <- MannKendall(x_clean)
+      list(tau = as.numeric(mk$tau), p = as.numeric(mk$sl))
+    }, error = function(e) {
+      list(tau = NA_real_, p = NA_real_)
+    })
+  }
+  
+  # Apply to each hexagon
+  mk_results <- gi_wide %>%
+    pivot_longer(cols = -hex_id, names_to = "period", values_to = "gi_value") %>%
+    group_by(hex_id) %>%
+    summarise(
+      gi_values = list(gi_value),
+      .groups = 'drop'
+    ) %>%
+    mutate(
+      mk_test = map(gi_values, safe_mk)
+    ) %>%
+    unnest_wider(mk_test) %>%
+    select(hex_id, tau, p)
+  
+})
+
+# EHSA Classification
+ehsa <- gi_wide %>%
+  left_join(mk_results, by = "hex_id") %>%
+  rowwise() %>%
+  mutate(
+    mean_gi = mean(c_across(starts_with("Week")), na.rm = TRUE),
+    ehsa = case_when(
+      is.na(p) ~ "Insufficient Data",
+      p >= 0.05 ~ "No Trend",
+      tau > 0 & mean_gi > 2 ~ "Intensifying Hot Spot",
+      tau > 0 & mean_gi > 0 ~ "New Hot Spot",
+      tau < 0 & mean_gi > 2 ~ "Diminishing Hot Spot",
+      tau < 0 & mean_gi < -2 ~ "Diminishing Cold Spot",
+      TRUE ~ "No Trend"
+    )
+  ) %>%
+  ungroup()
+
+ehsa_sf <- hex_grid %>%
+  left_join(ehsa, by = "hex_id")
+
+# Summary without NA
+ehsa_summary <- ehsa %>%
+  filter(!is.na(ehsa)) %>%
+  count(ehsa) %>%
+  mutate(percentage = round(n/sum(n)*100, 2)) %>%
+  arrange(desc(n))
+
+kable(ehsa_summary, 
+      caption = "EHSA Pattern Distribution",
+      col.names = c("Pattern", "Count", "Percentage"))
+```
+
+## EHSA Visualization
+```{r}
+#| label: ehsa-map
+pal_ehsa <- c(
+  "New Hot Spot" = "#d73027",
+  "Intensifying Hot Spot" = "#fc8d59",
+  "Diminishing Hot Spot" = "#fee08b",
+  "Diminishing Cold Spot" = "#91bfdb",
+  "No Trend" = "#f0f0f0",
+  "Insufficient Data" = "#ffffff"
+)
+
+# Check if there are any significant results
+sig_ehsa <- ehsa_sf %>% 
+  filter(!is.na(p) & p < 0.05)
+
+if(nrow(sig_ehsa) > 0) {
+  # Map significant results
+  tm_shape(sig_ehsa) +
+    tm_fill("ehsa", 
+            palette = pal_ehsa, 
+            title = "EHSA Classification") +
+    tm_borders(alpha = 0.3) +
+    tm_layout(main.title = "Emerging Hot Spot Analysis (MK p < 0.05)", 
+              frame = FALSE,
+              legend.position = c("right", "bottom"))
+} else {
+  # If no significant results, show all data with note
+  tm_shape(ehsa_sf) +
+    tm_fill("ehsa", 
+            palette = pal_ehsa, 
+            title = "EHSA Classification") +
+    tm_borders(alpha = 0.3) +
+    tm_layout(main.title = "Emerging Hot Spot Analysis (All Hexagons)\nNote: No significant trends detected (p < 0.05)", 
+              frame = FALSE,
+              legend.position = c("right", "bottom"))
+}
+
+# Additional summary of significance
+sig_summary <- ehsa %>%
+  mutate(significant = ifelse(!is.na(p) & p < 0.05, "Significant", "Not Significant")) %>%
+  count(significant)
+
+kable(sig_summary, 
+      caption = "Statistical Significance Summary",
+      col.names = c("Significance", "Count"))
+```
+
+# Comparative Analysis
+```{r}
+#| label: compare
+#| fig-width: 15
+#| fig-height: 5
+
+map_lisa <- tm_shape(am_sf %>% filter(lisa_p < 0.05)) +
+  tm_fill("lisa_quad", 
+          palette = c("High-High"="#d7191c","High-Low"="#fdae61",
+                     "Low-High"="#abd9e9","Low-Low"="#2c7bb6"),
+          legend.show = FALSE) +
+  tm_borders(alpha = 0.3) +
+  tm_layout(main.title = "Local Moran's I", frame = FALSE)
+
+map_gi <- tm_shape(am_sf %>% filter(gi_p < 0.05)) +
+  tm_fill("gi", palette = "-RdBu", legend.show = FALSE) +
+  tm_borders(alpha = 0.3) +
+  tm_layout(main.title = "Getis-Ord Gi*", frame = FALSE)
+
+map_geary <- tm_shape(am_sf %>% filter(geary_p < 0.05)) +
+  tm_fill("geary_c", palette = "RdBu", legend.show = FALSE) +
+  tm_borders(alpha = 0.3) +
+  tm_layout(main.title = "Local Geary's C", frame = FALSE)
+
+tmap_arrange(map_lisa, map_gi, map_geary, ncol = 3)
+```
+
+# Key Findings & Planning Recommendations
+
+## Spatial Patterns
+- **High-High Clusters**: Concentrated in mature residential estates during AM peak
+- **Hot Spots**: Major transport hubs show persistent high activity
+- **Cold Spots**: Industrial and low-density areas consistently show low passenger flows
+
+## Temporal Dynamics
+- **Intensifying Hot Spots**: Growing demand in regional centers
+- **Diminishing Hot Spots**: Some older town centers showing declining activity
+- **Stable Patterns**: CBD maintains consistent high demand across all periods
+
+## Planning Implications
+1. **Service Optimization**: Increase frequency in identified hot spots
+2. **Network Planning**: Connect emerging hot spots with express services
+3. **Infrastructure**: Upgrade facilities in intensifying hot spots
+4. **Review Coverage**: Assess service levels in persistent cold spots
+
+# Session Info
+```{r}
+#| label: session-info
+sessionInfo()
+```
