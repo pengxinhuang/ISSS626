@@ -483,49 +483,52 @@ gi_wide <- gi_ts %>%
 ## Mann-Kendall Trend Test
 ```{r}
 #| label: mann-kendall
-# Suppress warnings for cleaner output
-suppressWarnings({
-  
-  # Function to safely perform Mann-Kendall test
-  safe_mk <- function(x) {
-    x_clean <- x[!is.na(x)]
-    
-    # Need at least 3 values
-    if(length(x_clean) < 3) {
-      return(list(tau = NA_real_, p = NA_real_))
-    }
-    
-    # Check if all values are identical (no trend possible)
-    if(length(unique(x_clean)) == 1) {
-      return(list(tau = 0, p = 1))  # No trend
-    }
-    
-    # Try Mann-Kendall test
-    tryCatch({
-      mk <- MannKendall(x_clean)
-      list(tau = as.numeric(mk$tau), p = as.numeric(mk$sl))
-    }, error = function(e) {
-      list(tau = NA_real_, p = NA_real_)
-    })
-  }
-  
-  # Apply to each hexagon
-  mk_results <- gi_wide %>%
-    pivot_longer(cols = -hex_id, names_to = "period", values_to = "gi_value") %>%
-    group_by(hex_id) %>%
-    summarise(
-      gi_values = list(gi_value),
-      .groups = 'drop'
-    ) %>%
-    mutate(
-      mk_test = map(gi_values, safe_mk)
-    ) %>%
-    unnest_wider(mk_test) %>%
-    select(hex_id, tau, p)
-  
-})
+#| include: false
 
-# EHSA Classification
+invisible(capture.output({
+  suppressWarnings({
+    
+    # Function to safely perform Mann-Kendall test
+    safe_mk <- function(x) {
+      x_clean <- x[!is.na(x)]
+      
+      # Need at least 3 values
+      if(length(x_clean) < 3) {
+        return(list(tau = NA_real_, p = NA_real_))
+      }
+      
+      # Check if all values are identical (no trend possible)
+      if(length(unique(x_clean)) == 1) {
+        return(list(tau = 0, p = 1))  # No trend
+      }
+      
+      # Try Mann-Kendall test
+      tryCatch({
+        mk <- MannKendall(x_clean)
+        list(tau = as.numeric(mk$tau), p = as.numeric(mk$sl))
+      }, error = function(e) {
+        list(tau = NA_real_, p = NA_real_)
+      })
+    }
+    
+    # Apply to each hexagon
+    mk_results <- gi_wide %>%
+      pivot_longer(cols = -hex_id, names_to = "period", values_to = "gi_value") %>%
+      group_by(hex_id) %>%
+      summarise(
+        gi_values = list(gi_value),
+        .groups = 'drop'
+      ) %>%
+      mutate(
+        mk_test = map(gi_values, safe_mk)
+      ) %>%
+      unnest_wider(mk_test) %>%
+      select(hex_id, tau, p)
+    
+  })
+}, type = "output"))
+
+# EHSA Classification (这部分保持在代码块内)
 ehsa <- gi_wide %>%
   left_join(mk_results, by = "hex_id") %>%
   rowwise() %>%
@@ -545,7 +548,9 @@ ehsa <- gi_wide %>%
 
 ehsa_sf <- hex_grid %>%
   left_join(ehsa, by = "hex_id")
-
+```
+```{r}
+#| label: mann-kendall-summary
 # Summary without NA
 ehsa_summary <- ehsa %>%
   filter(!is.na(ehsa)) %>%
@@ -557,7 +562,6 @@ kable(ehsa_summary,
       caption = "EHSA Pattern Distribution",
       col.names = c("Pattern", "Count", "Percentage"))
 ```
-
 ## EHSA Visualization
 ```{r}
 #| label: ehsa-map
